@@ -297,7 +297,7 @@ then
     # Ask for GitHub credentials unless they already exist in ./git-credentials
     if ! test -f ./git-credentials;
     then
-        info "The GCP instances will need to clone the following private repositories:"
+        info "The Azure instances will need to clone the following private repositories:"
         info "  - ${kernel_link}"
         info "  - ${tsc_link}"
         echo "Please provide your GitHub username and a personal access token to continue."
@@ -321,16 +321,7 @@ then
 
 fi
 
-# Create RSA keypair for SSH into the instance unless one already exists
-#if ! [ -f gcp-key ];
-#then
-#    info "Creating RSA keypair for SSH into the instance"
-#    indented ssh-keygen -t rsa -f gcp-key -C "${ssh_username}@computer" -N "" -q
 #
-#    # Prepend the public key with the username as GCP requires it.
-#    sed -i.bak "s/^/${ssh_username}:/" gcp-key.pub
-#    rm gcp-key.pub.bak
-#fi
 
 # Create RSA keypair for SSH into the instance unless one already exists
 if ! [ -f azure-key ]; then
@@ -349,7 +340,7 @@ uuid=$(openssl rand -hex 4)
 vm_name="chronos-base-$uuid"
 info "Creating instance with name %s" "$vm_name"
 
-# 2 Create an Azure VM instance using these parameters ||  gcloud compute instances create ➔ az vm create
+# 2 Create an Azure VM instance using these parameters
 indented az vm create \
     --resource-group "${resource_group}" \
     --name "${vm_name}" \
@@ -394,6 +385,15 @@ private_ip=$(az vm show \
     --output tsv)
 info "Private IP of instance: %s" "${private_ip}"
 
+# Clone the kernel and fake_tsc repositories in the instance
+info "Cloning the kernel and fake_tsc repositories in the instance"
+indented az vm extension set \
+    --resource-group "${resource_group}" \
+    --vm-name "${vm_name}" \
+    --name customScript \
+    --publisher Microsoft.Azure.Extensions \
+    --settings "{\"commandToExecute\": \"git clone ${kernel_link} chronos-kernel && git clone ${tsc_link} fake_tsc\"}"
+
 # Use Custom Script Extension to execute base_image_setup.sh
 info "Download and execute base_image_setup.sh"
 indented az vm extension set \
@@ -401,7 +401,14 @@ indented az vm extension set \
     --vm-name "${vm_name}" \
     --name customScript \
     --publisher Microsoft.Azure.Extensions \
-    --settings "{\"fileUris\": [\"https://raw.githubusercontent.com/xyf2002/Chronos-Azure/main/image_scripts/base_image_setup.sh\"], \"commandToExecute\": \"bash base_image_setup.sh\"}"
+    --settings "{\"fileUris\": [\"https://raw.githubusercontent.com/xyf2002/Chronos-Azure/main/image_scripts/base_image_setup.sh\"], \"commandToExecute\": \" bash base_image_setup.sh\"}"
+
+az vm extension show \
+  --resource-group "${resource_group}" \
+  --vm-name "${vm_name}" \
+  --name customScript \
+  --query "instanceView.statuses[?code=='ProvisioningState/succeeded'].message" \
+  --output tsv
 
 # Use Custom Script Extension to update initramfs and grub
 info "Updating initramfs and grub for custom kernel"

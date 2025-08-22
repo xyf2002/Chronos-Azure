@@ -47,15 +47,23 @@ fi
 
 # apt-get update fails unless we do this
 info "Fixing apt-get update"
-sudo apt-get install -y --reinstall libappstream*
+sudo apt-get update
+
+sudo apt-get install -y --reinstall libappstream* --fix-missing
 
 info "Installing kernel build dependencies"
-sudo apt-get update
+
 # Essentials for building the kernel
-sudo apt-get install -y build-essential flex bison libssl-dev libelf-dev dwarves
+sudo apt-get install -y build-essential flex bison libssl-dev libelf-dev dwarves --fix-missing
 # Nice to have utilities
-sudo apt-get install -y ripgrep
-cd ~/chronos-kernel || exit
+sudo apt-get install -y ripgrep --fix-missing
+
+if [ ! -d /home/root/chronos-kernel ]; then
+    info "chronos-kernel directory not found, aborting."
+    exit 1
+fi
+
+cd /home/root/chronos-kernel || exit
 
 info "Copying current kernel config to .config"
 cp "/boot/config-$(uname -r)" .config # Copy the current kernel config
