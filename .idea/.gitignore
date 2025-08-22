@@ -1,0 +1,9 @@
+bin
+gcp-key
+gcp-key.pub
+azure-key
+azure-key.pub
+git-credentials
+instances.json
+instances.txt
+.DS_Store
