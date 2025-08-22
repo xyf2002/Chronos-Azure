@@ -295,7 +295,7 @@ if ! curl -s -L --head "${kernel_link}" | grep "HTTP/2 200" &> /dev/null ||
 then
   info "One or both of the repositories are private. Attempting to clone them with credentials."
     # Ask for GitHub credentials unless they already exist in ./git-credentials
-    if ! test -f ../git-credentials;
+    if ! test -f ./git-credentials;
     then
         info "The GCP instances will need to clone the following private repositories:"
         info "  - ${kernel_link}"
@@ -304,12 +304,12 @@ then
         read -r github_username
         read -r -s github_token
         echo ""
-        info "Saving credentials to ../git-credentials"
-        echo "$github_username:$github_token" > ../git-credentials
+        info "Saving credentials to ./git-credentials"
+        echo "$github_username:$github_token" > ./git-credentials
     else
-        info "Reading GitHub credentials from ../git-credentials"
-        github_username=$(cut -d: -f1 ../git-credentials)
-        github_token=$(cut -d: -f2 ../git-credentials)
+        info "Reading GitHub credentials from ./git-credentials"
+        github_username=$(cut -d: -f1 ./git-credentials)
+        github_token=$(cut -d: -f2 ./git-credentials)
         info "Using existing credentials to clone the repositories"
     fi
     # Step 3: update clone URLs to include token

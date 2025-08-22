@@ -2,7 +2,7 @@
 ################################################################################
 # Step 1: Extract GitHub credentials from file
 ################################################################################
-CRED_FILE="../git-credentials"
+CRED_FILE="./git-credentials"
 if [ ! -f "$CRED_FILE" ]; then
     echo "Git credentials file not found at: $CRED_FILE"
     exit 1
