@@ -392,9 +392,9 @@ private_ip=$(az vm show \
     --show-details \
     --query privateIps \
     --output tsv)
-info "External IP of instance: %s" "${external_ip}"
+info "Private IP of instance: %s" "${private_ip}"
 
-# Use Azure Custom Script Extension to download and execute  base_image_setup.sh
+# Use Custom Script Extension to execute base_image_setup.sh
 info "Download and execute base_image_setup.sh"
 indented az vm extension set \
     --resource-group "${resource_group}" \
@@ -403,18 +403,29 @@ indented az vm extension set \
     --publisher Microsoft.Azure.Extensions \
     --settings "{\"fileUris\": [\"https://raw.githubusercontent.com/xyf2002/Chronos-Azure/main/image_scripts/base_image_setup.sh\"], \"commandToExecute\": \"bash base_image_setup.sh\"}"
 
+# Use Custom Script Extension to update initramfs and grub
 info "Updating initramfs and grub for custom kernel"
-indented ssh -i azure-key "${ssh_username}@${external_ip}" "sudo update-initramfs -c -k all && sudo update-grub"
+indented az vm extension set \
+    --resource-group "${resource_group}" \
+    --vm-name "${vm_name}" \
+    --name customScript \
+    --publisher Microsoft.Azure.Extensions \
+    --settings "{\"commandToExecute\": \"sudo update-initramfs -c -k all && sudo update-grub\"}"
 
-# Reboot instance
+# Use Custom Script Extension to reboot the VM
 info "Rebooting instance"
-indented ssh -i azure-key "${ssh_username}@${external_ip}" "sudo reboot" &> /dev/null || true
+indented az vm extension set \
+    --resource-group "${resource_group}" \
+    --vm-name "${vm_name}" \
+    --name customScript \
+    --publisher Microsoft.Azure.Extensions \
+    --settings "{\"commandToExecute\": \"sudo reboot\"}"
 
-# Wait longer and check VM status before attempting connection
+# Wait for VM to reboot
 info "Waiting for VM to complete reboot process"
 sleep 30
 
-# Check VM power state first
+# Check VM power state after reboot
 info "Checking VM power state after reboot"
 for attempt in {1..20}; do
     vm_state=$(az vm get-instance-view \
@@ -439,55 +450,16 @@ for attempt in {1..20}; do
     fi
 done
 
-# Wait for the instance to be rebooted by attempting SSH every 10 seconds
-info "Reestablishing connection to instance after reboot"
-
-# Wait for SSH to be available with more comprehensive checking
-for i in {1..60}; do
-    # First check if port 22 is reachable
-    if timeout 10 nc -z "${external_ip}" 22 2>/dev/null; then
-        echo "Port 22 is open, attempting SSH connection..."
-
-        if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=10 \
-            -o ServerAliveInterval=5 \
-            -o ServerAliveCountMax=2 \
-            -i azure-key "${ssh_username}@${external_ip}" \
-            "echo 'Instance rebooted successfully'" &> /dev/null
-        then
-            info "Instance is back online after reboot"
-            break
-        else
-            echo "SSH connection failed, but port 22 is open. Retrying... ($i/60)"
-        fi
-    else
-        echo "Port 22 not reachable yet, waiting... ($i/60)"
-    fi
-
-    # Every 10 attempts, check VM status and try to restart SSH service
-    if [[ $((i % 10)) -eq 0 ]]; then
-        echo "Checking VM status and attempting to restart SSH service..."
-        az vm run-command invoke \
-            --resource-group "${resource_group}" \
-            --name "${vm_name}" \
-            --command-id RunShellScript \
-            --scripts "sudo systemctl restart ssh; sudo systemctl status ssh; sudo netstat -tlnp | grep :22" \
-            --output table 2>/dev/null || echo "Run-command failed, VM might still be booting"
-    fi
-
-    sleep 10
-done
-
-# Safety check in case SSH still failed
-if [[ $i -eq 30 ]]; then
-    error "SSH connection failed after reboot. Exiting."
-    exit 1
-fi
-
-# Check the kernel version
+# Use Custom Script Extension to check kernel version
 info "Checking that the custom kernel is being used"
-kernel=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -i azure-key "${ssh_username}@${external_ip}" "uname -r")
+kernel=$(az vm extension set \
+    --resource-group "${resource_group}" \
+    --vm-name "${vm_name}" \
+    --name customScript \
+    --publisher Microsoft.Azure.Extensions \
+    --settings "{\"commandToExecute\": \"uname -r\"}" \
+    --query "instanceView.statuses[?code=='ProvisioningState/succeeded'].message" \
+    --output tsv | tail -n 1)
 
 if [[ $kernel == *"azure"* ]]; then
     error "Kernel is not the custom kernel, it is: ${kernel}. Exiting."
