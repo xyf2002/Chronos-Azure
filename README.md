@@ -87,6 +87,11 @@ Delete all experiment resources except the base image and image gallery.
 **Parameter description:**
 - `--resource-group`: Azure resource group name (required)
 
+**Full example:**
+```bash
+./delete_chronos_resources.sh --resource-group chronos-test
+```
+
 ---
 
 ## Dependencies
