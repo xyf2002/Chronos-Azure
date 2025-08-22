@@ -394,19 +394,14 @@ private_ip=$(az vm show \
     --output tsv)
 info "External IP of instance: %s" "${external_ip}"
 
-# Clone the kernel and fake_tsc repositories in the instance
-info "Cloning the kernel and fake_tsc repositories in the instance"
-
-indented ssh -i azure-key "${ssh_username}@${external_ip}" "bash -c \"git clone '${kernel_link}'\""
-indented ssh -i azure-key "${ssh_username}@${external_ip}" "bash -c \"git clone '${tsc_link}'\""
-
-
-# 4. Copy and run the script
-# Copy the setup script to the instance
-indented scp -i azure-key scripts/base_image_setup.sh "${ssh_username}@${external_ip}":~
-# Run the setup script
-indented ssh -i azure-key "${ssh_username}@${external_ip}" "bash base_image_setup.sh | tee .image_setup.log"
-
+# Use Azure Custom Script Extension to download and execute  base_image_setup.sh
+info "Download and execute base_image_setup.sh"
+indented az vm extension set \
+    --resource-group "${resource_group}" \
+    --vm-name "${vm_name}" \
+    --name customScript \
+    --publisher Microsoft.Azure.Extensions \
+    --settings "{\"fileUris\": [\"https://raw.githubusercontent.com/xyf2002/Chronos-Azure/main/image_scripts/base_image_setup.sh\"], \"commandToExecute\": \"bash base_image_setup.sh\"}"
 
 info "Updating initramfs and grub for custom kernel"
 indented ssh -i azure-key "${ssh_username}@${external_ip}" "sudo update-initramfs -c -k all && sudo update-grub"
