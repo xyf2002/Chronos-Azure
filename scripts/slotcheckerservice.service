@@ -1,0 +1,12 @@
+[Unit]
+Description=Slot Checker Service
+After=network.target
+
+[Service]
+ExecStart=/local/repository/scripts/start_slotchecker.sh
+Restart=always
+User=uzzu
+WorkingDirectory=/local/repository/scripts
+
+[Install]
+WantedBy=multi-user.target
