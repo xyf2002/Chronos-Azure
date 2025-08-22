@@ -58,12 +58,9 @@ sudo apt-get install -y build-essential flex bison libssl-dev libelf-dev dwarves
 # Nice to have utilities
 sudo apt-get install -y ripgrep --fix-missing
 
-if [ ! -d /home/root/chronos-kernel ]; then
-    info "chronos-kernel directory not found, aborting."
-    exit 1
-fi
 
-cd /home/root/chronos-kernel || exit
+
+cd /home/azureuser/chronos-kernel || exit
 
 info "Copying current kernel config to .config"
 cp "/boot/config-$(uname -r)" .config # Copy the current kernel config

@@ -6,7 +6,7 @@ source_image="Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
 zone="uksouth"
 image_description="Auto-generated Chronos Base Image"
 machine_type="Standard_D4s_v3"
-ssh_username="ubuntu"
+ssh_username="azureuser"
 disk_size=30
 
 # Network configuration
@@ -392,7 +392,7 @@ indented az vm extension set \
     --vm-name "${vm_name}" \
     --name customScript \
     --publisher Microsoft.Azure.Extensions \
-    --settings "{\"commandToExecute\": \"git clone ${kernel_link} chronos-kernel && git clone ${tsc_link} fake_tsc\"}"
+    --settings "{\"commandToExecute\": \"cd /home/azureuser && git clone ${kernel_link} chronos-kernel && git clone ${tsc_link} fake_tsc\"}"
 
 # Use Custom Script Extension to execute base_image_setup.sh
 info "Download and execute base_image_setup.sh"
@@ -401,7 +401,7 @@ indented az vm extension set \
     --vm-name "${vm_name}" \
     --name customScript \
     --publisher Microsoft.Azure.Extensions \
-    --settings "{\"fileUris\": [\"https://raw.githubusercontent.com/xyf2002/Chronos-Azure/main/image_scripts/base_image_setup.sh\"], \"commandToExecute\": \" bash base_image_setup.sh\"}"
+    --settings "{\"fileUris\": [\"https://raw.githubusercontent.com/xyf2002/Chronos-Azure/main/image_scripts/base_image_setup.sh\"], \"commandToExecute\": \"  bash base_image_setup.sh\"}"
 
 az vm extension show \
   --resource-group "${resource_group}" \
@@ -481,7 +481,7 @@ fi
 #
 ################################################################################
 
-
+ls -
 
 # 7 Stop the instance || gcloud compute instances stop
 info "Stopping instance to create image"
