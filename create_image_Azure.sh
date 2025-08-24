@@ -395,8 +395,8 @@ indented az vm extension set \
     --settings "{\"commandToExecute\": \"cd /home/azureuser && git clone ${kernel_link} chronos-kernel && git clone ${tsc_link} fake_tsc\"}"
 
 # Use Custom Script Extension to execute base_image_setup.sh
-info "Download and execute base_image_setup.sh"
-indented az vm extension set \
+info "Download and execute base_image_setup.sh (Compiling the kernel may take 1h+ depending on VM performance)"
+az vm extension set \
     --resource-group "${resource_group}" \
     --vm-name "${vm_name}" \
     --name customScript \
@@ -411,22 +411,23 @@ az vm extension show \
   --output tsv
 
 # Use Custom Script Extension to update initramfs and grub
-info "Updating initramfs and grub for custom kernel"
+#info "Updating initramfs and grub for custom kernel"
+#indented az vm extension set \
+#    --resource-group "${resource_group}" \
+#    --vm-name "${vm_name}" \
+#    --name customScript \
+#    --publisher Microsoft.Azure.Extensions \
+#    --settings "{\"commandToExecute\": \"sudo update-initramfs -c -k all && sudo update-grub\"}"
 indented az vm extension set \
     --resource-group "${resource_group}" \
     --vm-name "${vm_name}" \
     --name customScript \
     --publisher Microsoft.Azure.Extensions \
-    --settings "{\"commandToExecute\": \"sudo update-initramfs -c -k all && sudo update-grub\"}"
+    --settings "{\"commandToExecute\": \"sudo sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=\\\"Advanced options for Ubuntu>Ubuntu, with Linux 5.15.160+\\\"/' /etc/default/grub && sudo update-initramfs -c -k all && sudo update-grub\"}"
 
 # Use Custom Script Extension to reboot the VM
 info "Rebooting instance"
-indented az vm extension set \
-    --resource-group "${resource_group}" \
-    --vm-name "${vm_name}" \
-    --name customScript \
-    --publisher Microsoft.Azure.Extensions \
-    --settings "{\"commandToExecute\": \"sudo reboot\"}"
+az vm restart --resource-group "${resource_group}" --name "${vm_name}"
 
 # Wait for VM to reboot
 info "Waiting for VM to complete reboot process"
@@ -481,7 +482,6 @@ fi
 #
 ################################################################################
 
-ls -
 
 # 7 Stop the instance || gcloud compute instances stop
 info "Stopping instance to create image"
