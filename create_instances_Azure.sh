@@ -597,19 +597,18 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
 
     # Use run-command for reliable file transfer
     echo "Using Azure run-command to transfer scripts..."
-    tar -czf /tmp/scripts_${VM_NAME}.tar.gz -C . scripts/
-#    scripts_b64=$(base64 -i /tmp/scripts_${VM_NAME}.tar.gz)
+    tar -czf /tmp/scripts_${VM_NAME}.tar.gz -C . instances_scripts/
     scripts_b64=$(base64 < /tmp/scripts_${VM_NAME}.tar.gz)
     az vm run-command invoke \
       --resource-group "$RESOURCE_GROUP" \
       --name "$VM_NAME" \
       --command-id RunShellScript \
-      --scripts "echo '${scripts_b64}' | base64 -d > /tmp/scripts.tar.gz && cd /home/azureuser && tar -xzf /tmp/scripts.tar.gz && chown -R azureuser:azureuser scripts/ && rm /tmp/scripts.tar.gz" \
+      --scripts "echo '${scripts_b64}' | base64 -d > /tmp/scripts.tar.gz && cd /home/azureuser && tar -xzf /tmp/scripts.tar.gz && chown -R azureuser:azureuser instances_scripts/ && rm /tmp/scripts.tar.gz" \
       --output none
     rm -f /tmp/scripts_${VM_NAME}.tar.gz
 
     ################################################################################
-    # STEP 4: REMOTE BUILD KERNEL & CONFIGURATION VIA SCRIPT FILE
+    # STEP 4: REMOTE BUILD KERNEL & CONFIGURATION VIA AZURE VM EXTENSION
     ################################################################################
     INSTANCE_ID=${i}
     echo "STARTING REMOTE KERNEL BUILD AND CONFIGURATION ON ${VM_NAME}"
@@ -617,17 +616,8 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
     # Step 4.1: Transfer the script using run-command (reliable)
     echo "Transferring remote_build_kernel.sh to ${VM_NAME}..."
 
-#      echo "Executing remote_build_kernel.sh on ${VM_NAME} using run-command..."
-#      script_b64=$(base64 < ./remote_build_kernel.sh)
-#      az vm run-command invoke \
-#        --resource-group "$RESOURCE_GROUP" \
-#        --name "$VM_NAME" \
-#        --command-id RunShellScript \
-#        --scripts "echo '${script_b64}' | base64 -d > /home/azureuser/remote_build_kernel.sh && chmod +x /home/azureuser/remote_build_kernel.sh && cd /home/azureuser && ./remote_build_kernel.sh ${INSTANCE_ID} ${INSTANCE_COUNT} ${GITHUB_USERNAME} ${GITHUB_TOKEN}" \
-#        --output table\
-
-      echo "Executing remote_build_kernel.sh on ${VM_NAME} using run-command..."
-    script_b64=$(base64 < ./remote_build_kernel.sh)
+    echo "Executing remote_build_kernel.sh on ${VM_NAME} using run-command..."
+    script_b64=$(base64 < ./instances_scripts/remote_build_kernel.sh)
     az vm run-command invoke \
       --resource-group "$RESOURCE_GROUP" \
       --name "$VM_NAME" \
