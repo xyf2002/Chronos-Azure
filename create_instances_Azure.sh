@@ -546,7 +546,7 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
     # Step 4.1: Transfer the script using run-command
 
     echo "Executing remote_build_kernel.sh on ${VM_NAME} using run-command..."
-    echo "Note: For now just copy script and does not run"
+    echo "Note: For now, just copy the script without executing it. We only need to ensure the resources are created and the script is available for future updates."
 
 #    script_b64=$(base64 < ./instance_scripts/remote_build_kernel.sh)
 #    az vm run-command invoke \
