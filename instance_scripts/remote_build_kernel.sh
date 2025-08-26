@@ -63,7 +63,7 @@ if [ -f "$HOME/.kernel_done" ] && [ -f "$HOME/.rebooted" ] && [ ! -f "$HOME/.tsc
     fi
 
     if [ ! -d fake_tsc ]; then
-        git clone "https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/ujjwalpawar/fake_tsc.git"
+        git clone "https://github.com/ujjwalpawar/fake_tsc.git"
     fi
     cd fake_tsc
     [ -f init.c ] && { step_log "Compiling init.c" ""; gcc init.c -o init; }
