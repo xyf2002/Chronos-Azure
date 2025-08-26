@@ -520,76 +520,6 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
       sleep 10
     done
 
-    # Test SSH connectivity via Bastion only
-    echo "Testing SSH connectivity to ${VM_NAME} via Bastion..."
-    ssh_success=false
-
-    # Ensure VM is ready and SSH service is running
-    for check_attempt in {1..10}; do
-        echo "Service check attempt ${check_attempt}/10..."
-
-        # Use Azure VM run-command to check SSH service status
-        service_status=$(az vm run-command invoke \
-            --resource-group "$RESOURCE_GROUP" \
-            --name "$VM_NAME" \
-            --command-id RunShellScript \
-            --scripts "systemctl is-active ssh || systemctl is-active sshd" \
-            --query "value[0].message" \
-            --output tsv 2>/dev/null || echo "failed")
-
-        echo "SSH service status: $service_status"
-
-        if [[ "$service_status" == *"active"* ]]; then
-            echo "SSH service is active on ${VM_NAME}"
-            break
-        elif [[ "$service_status" == *"failed"* ]] || [[ "$service_status" == *"inactive"* ]]; then
-            echo "Starting SSH service on ${VM_NAME}..."
-            az vm run-command invoke \
-                --resource-group "$RESOURCE_GROUP" \
-                --name "$VM_NAME" \
-                --command-id RunShellScript \
-                --scripts "sudo systemctl start ssh || sudo systemctl start sshd; sudo systemctl enable ssh || sudo systemctl enable sshd" \
-                --output none
-        fi
-
-        sleep 10
-    done
-
-    # Try basic Bastion SSH connectivity test
-    for attempt in {1..3}; do
-      echo "SSH attempt ${attempt}/3 to ${VM_NAME} via Bastion..."
-
-      # Try az network bastion ssh (without --command parameter)
-      if timeout 30 az network bastion ssh \
-        --name "$BASTION_NAME" \
-        --resource-group "$RESOURCE_GROUP" \
-        --target-resource-id "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Compute/virtualMachines/${VM_NAME}" \
-        --auth-type "ssh-key" \
-        --username "azureuser" \
-        --ssh-key "~/.ssh/id_rsa" 2>/tmp/bastion_ssh_${VM_NAME}.log <<<'echo "SSH test successful"; exit'; then
-        echo "✓ SSH via Bastion to ${VM_NAME} established successfully"
-        ssh_success=true
-        break
-      else
-        echo "✗ Bastion SSH test failed. Debug output:"
-        tail -5 /tmp/bastion_ssh_${VM_NAME}.log 2>/dev/null || echo "No debug log available"
-      fi
-
-      sleep 10
-    done
-
-    # Since SSH tests are unreliable, we'll assume success if VM is running and SSH service is active
-    if [[ "$service_status" == *"active"* ]]; then
-      echo "✓ VM ${VM_NAME} is ready for operations (SSH service active)"
-      ssh_success=true
-    else
-      echo "⚠️ Cannot confirm SSH connectivity to ${VM_NAME}, using run-command only"
-      ssh_success=false
-    fi
-
-    # Always use run-command for reliability
-    USE_RUN_COMMAND=true
-
  ################################################################################
     # PRE-COPY LOCAL SCRIPTS DIRECTORY TO REMOTE MACHINE FOR LATER USE
     ################################################################################
@@ -597,13 +527,13 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
 
     # Use run-command for reliable file transfer
     echo "Using Azure run-command to transfer scripts..."
-    tar -czf /tmp/scripts_${VM_NAME}.tar.gz -C . instances_scripts/
+    tar -czf /tmp/scripts_${VM_NAME}.tar.gz -C . instance_scripts/
     scripts_b64=$(base64 < /tmp/scripts_${VM_NAME}.tar.gz)
     az vm run-command invoke \
       --resource-group "$RESOURCE_GROUP" \
       --name "$VM_NAME" \
       --command-id RunShellScript \
-      --scripts "echo '${scripts_b64}' | base64 -d > /tmp/scripts.tar.gz && cd /home/azureuser && tar -xzf /tmp/scripts.tar.gz && chown -R azureuser:azureuser instances_scripts/ && rm /tmp/scripts.tar.gz" \
+      --scripts "echo '${scripts_b64}' | base64 -d > /tmp/scripts.tar.gz && cd /home/azureuser && tar -xzf /tmp/scripts.tar.gz && chown -R azureuser:azureuser instance_scripts/ && rm /tmp/scripts.tar.gz" \
       --output none
     rm -f /tmp/scripts_${VM_NAME}.tar.gz
 
@@ -611,19 +541,20 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
     # STEP 4: REMOTE BUILD KERNEL & CONFIGURATION VIA AZURE VM EXTENSION
     ################################################################################
     INSTANCE_ID=${i}
-    echo "STARTING REMOTE KERNEL BUILD AND CONFIGURATION ON ${VM_NAME}"
+    echo "STARTING SR AND CONFIGURATION ON ${VM_NAME}"
 
-    # Step 4.1: Transfer the script using run-command (reliable)
-    echo "Transferring remote_build_kernel.sh to ${VM_NAME}..."
+    # Step 4.1: Transfer the script using run-command
 
     echo "Executing remote_build_kernel.sh on ${VM_NAME} using run-command..."
-    script_b64=$(base64 < ./instances_scripts/remote_build_kernel.sh)
-    az vm run-command invoke \
-      --resource-group "$RESOURCE_GROUP" \
-      --name "$VM_NAME" \
-      --command-id RunShellScript \
-      --scripts "echo '${script_b64}' | base64 -d > /home/azureuser/remote_build_kernel.sh && chmod +x /home/azureuser/remote_build_kernel.sh" \
-      --output table
+    echo "Note: For now just copy script and does not run"
+
+#    script_b64=$(base64 < ./instance_scripts/remote_build_kernel.sh)
+#    az vm run-command invoke \
+#      --resource-group "$RESOURCE_GROUP" \
+#      --name "$VM_NAME" \
+#      --command-id RunShellScript \
+#      --scripts "echo '${script_b64}' | base64 -d > /home/azureuser/instance_scripts/remote_build_kernel.sh && chmod +x /home/azureuser/instance_scripts/remote_build_kernel.sh" \
+#      --output table
 
 
   ) &
