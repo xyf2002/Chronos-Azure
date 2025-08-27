@@ -437,7 +437,17 @@ if [ "$PROXY_ENABLED" = true ]; then
       --output none
     rm -f /tmp/scripts_${PROXY_VM_NAME}.tar.gz
 
-    echo "Proxy VM ${PROXY_VM_NAME} created and configured successfully"
+    # Execute build_proxy.sh using VM extension
+    echo "Executing build_proxy.sh on proxy VM ${PROXY_VM_NAME} using VM extension..."
+    az vm extension set \
+      --resource-group "$RESOURCE_GROUP" \
+      --vm-name "$PROXY_VM_NAME" \
+      --name CustomScript \
+      --publisher Microsoft.Azure.Extensions \
+      --settings '{"commandToExecute":"cd /home/azureuser && chmod +x instance_scripts/build_proxy.sh && ./instance_scripts/build_proxy.sh"}' \
+      --no-wait
+
+    echo "Proxy VM ${PROXY_VM_NAME} created and configured successfully with build_proxy.sh execution initiated"
 fi
 
 ################################################################################
@@ -650,7 +660,7 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
       sleep 10
     done
 
- ################################################################################
+  ################################################################################
     # PRE-COPY LOCAL SCRIPTS DIRECTORY TO REMOTE MACHINE FOR LATER USE
     ################################################################################
     echo "COPYING LOCAL SCRIPTS FOLDER TO REMOTE VM ${VM_NAME}"
@@ -671,21 +681,17 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
     # STEP 4: REMOTE BUILD KERNEL & CONFIGURATION VIA AZURE VM EXTENSION
     ################################################################################
     INSTANCE_ID=${i}
-    echo "STARTING SR AND CONFIGURATION ON ${VM_NAME}"
+    echo "STARTING KERNEL BUILD AND CONFIGURATION ON ${VM_NAME}"
 
-    # Step 4.1: Transfer the script using run-command
-
-    echo "Executing remote_build_kernel.sh on ${VM_NAME} using run-command..."
-    echo "Note: For now, just copy the script without executing it. We only need to ensure the resources are created and the script is available for future updates."
-
-#    script_b64=$(base64 < ./instance_scripts/remote_build_kernel.sh)
-#    az vm run-command invoke \
-#      --resource-group "$RESOURCE_GROUP" \
-#      --name "$VM_NAME" \
-#      --command-id RunShellScript \
-#      --scripts "echo '${script_b64}' | base64 -d > /home/azureuser/instance_scripts/remote_build_kernel.sh && chmod +x /home/azureuser/instance_scripts/remote_build_kernel.sh" \
-#      --output table
-
+    # Execute build_instance.sh using VM extension
+    echo "Executing build_instance.sh on ${VM_NAME} using VM extension..."
+    az vm extension set \
+      --resource-group "$RESOURCE_GROUP" \
+      --vm-name "$VM_NAME" \
+      --name CustomScript \
+      --publisher Microsoft.Azure.Extensions \
+      --settings '{"commandToExecute":"cd /home/azureuser &&  ./instance_scripts/build_instance.sh"}' \
+      --no-wait
 
   ) &
 done
@@ -696,3 +702,4 @@ wait || echo "Some background jobs failed or were killed."
 # Step 6: All Azure VM creation and configuration commands executed.
 ################################################################################
 echo "All Azure VM creation and configuration commands executed."
+
