@@ -72,7 +72,7 @@ if [ -f "$HOME/.kernel_done" ] && [ -f "$HOME/.rebooted" ] && [ ! -f "$HOME/.tsc
     step_log "Building fake_tsc module" ""; sudo make -C /lib/modules/$(uname -r)/build M=$PWD modules
     step_log "Inserting custom_tsc.ko" ""; sudo insmod custom_tsc.ko; sudo modprobe kvm; sudo modprobe kvm_intel; sudo ./init; sudo ./init
     step_log "Installing additional libs and verifying fake_tsc module" ""; sudo apt-get install -yqq libsctp-dev lksctp-tools zlib1g-dev; sudo modprobe sctp; sudo lsmod | grep custom_tsc || echo 'Warning: custom_tsc not loaded'; sudo dmesg | tail -n 20
-    cp ~/scripts/slotcheckerservice.c ./; gcc slotcheckerservice.c -o slotcheckerservice
+    cp ~/instance_scripts/slotcheckerservice.c ./; gcc slotcheckerservice.c -o slotcheckerservice
     touch "$HOME/.tsc_done"
 fi
 
@@ -130,7 +130,7 @@ if [ -f "$HOME/.tsc_done" ] && [ ! -f "$HOME/.vm_setup_done" ]; then
     VM_NAME="ins${INSTANCE_ID}"
 
     #step_log "Changing default storage location"
-   # sudo $HOME/repository/scripts/change_storage.sh
+   # sudo $HOME/repository/instance_scripts/change_storage.sh
 
     step_log "VM  = ${VM_NAME}"
     step_log "Int = ${INTERNAL_IP}"
@@ -325,15 +325,15 @@ if [ -f "$HOME/.vm_setup_done" ] && [ ! -f "$HOME/.net_setup_done" ]; then
         [[ "$state" == "running" ]] && break
         sleep 1
     done
-    cd ~/scripts
+    cd ~/instance_scripts
     step_log "Adding ips"
-    sudo ~/scripts/add-secondary.sh
+    sudo ~/instance_scripts/add-secondary.sh
     sleep 5
     step_log "Generating json"
-    sudo ~/scripts/generate_config.sh $MACHINE_NUM
+    sudo ~/instance_scripts/generate_config.sh $MACHINE_NUM
     sleep 5
     step_log "Adding IP TABLES"
-    sudo ~/scripts/set_ip.sh
+    sudo ~/instance_scripts/set_ip.sh
     sleep 5
     step_log "Installing ssh pass"
     sudo apt-get -y install sshpass
@@ -345,7 +345,7 @@ if [ -f "$HOME/.vm_setup_done" ] && [ ! -f "$HOME/.net_setup_done" ]; then
     sshpass -p $password ssh-copy-id $SSH_OPTS ubuntu@${INTERNAL_IP}
 
     step_log "Copying script to add ip address"
-    scp $SSH_OPTS ~/scripts/add-secondary_vm.sh ubuntu@${INTERNAL_IP}:~/
+    scp $SSH_OPTS ~/instance_scripts/add-secondary_vm.sh ubuntu@${INTERNAL_IP}:~/
     step_log "calling copied script"
     ssh $SSH_OPTS ubuntu@${INTERNAL_IP}  "sudo /home/ubuntu/add-secondary_vm.sh"
     touch $HOME/.net_setup_done
@@ -362,14 +362,14 @@ if [ -f "$HOME/.net_setup_done" ] && [ ! -f "$HOME/.k0s_in_vm_done" ]; then
 
     if [ "${INSTANCE_ID}" -eq "0" ]; then
         step_log "Copying master k0s install script to VM" ""
-        scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ~/scripts/master_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
+        scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ~/instance_scripts/master_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
     else
         step_log "Copying worker k0s install script to VM" ""
-        scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ~/scripts/worker_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
+        scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ~/instance_scripts/worker_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
     fi
 
     step_log "Copying common k0s helper script to VM" ""
-    scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ~/scripts/common_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
+    scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ~/instance_scripts/common_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
 
     step_log "Creating SSH keys on VM" ""
     ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} "mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -q -t rsa -N \"\" -f ~/.ssh/id_rsa"
@@ -379,8 +379,8 @@ if [ -f "$HOME/.net_setup_done" ] && [ ! -f "$HOME/.k0s_in_vm_done" ]; then
     else
         ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} "bash /tmp/worker_install_k0.sh 10.2.0.1"
     fi
-    sudo gcc -pthread ~/scripts/slotcheckerservice.c -o slotcheckerservice
-    sudo cp ~/scripts/slotcheckerservice.service /etc/systemd/system/slotcheckerservice.service
+    sudo gcc -pthread ~/instance_scripts/slotcheckerservice.c -o slotcheckerservice
+    sudo cp ~/instance_scripts/slotcheckerservice.service /etc/systemd/system/slotcheckerservice.service
     sudo systemctl daemon-reload; sudo systemctl enable slotcheckerservice; sudo systemctl start slotcheckerservice
     touch "$HOME/.k0s_in_vm_done"
 fi
