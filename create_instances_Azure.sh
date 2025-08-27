@@ -27,6 +27,10 @@ SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 IMAGE="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/chronos-test/providers/Microsoft.Compute/galleries/chronosGallery/images/chronosBaseImage/versions/1.0.0"
 INSTANCE_COUNT=1
 VM_NAME_PREFIX="ins"
+PROXY_TYPE=""
+PROXY_ENABLED=false
+PROXY_IP="10.4.1.1"
+
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -34,7 +38,7 @@ while [[ $# -gt 0 ]]; do
             echo "create_instances_Azure.sh - create Azure VMs and configure Chronos experiment"
             echo ""
             echo "Usage:"
-            echo "  ./create_instances_Azure.sh --resource-group <resource-group> --location <location> --vm-size <vm-size> --instance-count <count> [--secondary-ip-count <count>] [--vm-per-instance <count>]"
+            echo "  ./create_instances_Azure.sh --resource-group <resource-group> --location <location> --vm-size <vm-size> --instance-count <count> [--secondary-ip-count <count>] [--vm-per-instance <count>] [--proxy-type <type>]"
             echo ""
             echo "Options:"
             echo "  --help, -h                      Show this help message and exit"
@@ -45,9 +49,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --secondary-ip-count <count>     Number of extra private IPs per VM (default: 2)"
             echo "  --vm-per-instance <count>        Number of QEMU VMs per Azure VM (default: 2)"
             echo "  --vm-name-prefix <prefix>        Prefix for VM names (default: ins)"
+            echo "  --proxy-type <type>             VM size for proxy machine (enables proxy creation)"
             echo ""
             echo "Example:"
-            echo "  ./create_instances_Azure.sh --resource-group chronos-test --location uksouth --vm-size Standard_D2s_v3 --instance-count 2 --secondary-ip-count 2"
+            echo "  ./create_instances_Azure.sh --resource-group chronos-test --location uksouth --vm-size Standard_D2s_v3 --instance-count 2 --secondary-ip-count 2 --proxy-type Standard_D2s_v3"
             exit 0
             ;;
         --resource-group)
@@ -104,6 +109,16 @@ while [[ $# -gt 0 ]]; do
             ;;
         --vm-name-prefix=*)
             VM_NAME_PREFIX="${1#*=}"
+            shift
+            ;;
+        --proxy-type)
+            PROXY_TYPE="$2"
+            PROXY_ENABLED=true
+            shift 2
+            ;;
+        --proxy-type=*)
+            PROXY_TYPE="${1#*=}"
+            PROXY_ENABLED=true
             shift
             ;;
         *)
@@ -309,6 +324,121 @@ for attempt in {1..10}; do
     sleep 3
   fi
 done
+
+################################################################################
+# Step 2.7: Create Proxy Subnet and Instance (if enabled)
+################################################################################
+if [ "$PROXY_ENABLED" = true ]; then
+    PROXY_SUBNET_NAME="proxy-subnet"
+    PROXY_SUBNET_PREFIX="10.4.1.0/24"
+    PROXY_VM_NAME="proxy-vm"
+    PROXY_NIC_NAME="proxy-nic"
+
+    echo "Creating proxy subnet ${PROXY_SUBNET_NAME} with prefix ${PROXY_SUBNET_PREFIX}..."
+    az network vnet subnet create \
+      --resource-group "$RESOURCE_GROUP" \
+      --vnet-name "$VNET_NAME" \
+      --name "$PROXY_SUBNET_NAME" \
+      --address-prefix "$PROXY_SUBNET_PREFIX" \
+      --nat-gateway "$NAT_GATEWAY_NAME"
+
+    # Wait for proxy subnet to be ready
+    for proxy_subnet_wait in {1..15}; do
+      if az network vnet subnet show --resource-group "$RESOURCE_GROUP" --vnet-name "$VNET_NAME" --name "$PROXY_SUBNET_NAME" >/dev/null 2>&1; then
+        echo "Proxy subnet ${PROXY_SUBNET_NAME} is ready."
+        break
+      else
+        echo "Waiting for proxy subnet to be ready... (${proxy_subnet_wait}/15)"
+        sleep 5
+      fi
+      if [ $proxy_subnet_wait -eq 15 ]; then
+        echo "ERROR: Proxy subnet ${PROXY_SUBNET_NAME} was not created successfully"
+        exit 1
+      fi
+    done
+
+    echo "Creating proxy NIC with IP ${PROXY_IP}..."
+    az network nic create \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$PROXY_NIC_NAME" \
+      --vnet-name "$VNET_NAME" \
+      --subnet "$PROXY_SUBNET_NAME" \
+      --private-ip-address "$PROXY_IP" \
+      --ip-forwarding true
+
+    # Verify proxy NIC creation
+    echo "Verifying proxy NIC ${PROXY_NIC_NAME} was created..."
+    for verify_attempt in {1..10}; do
+      if az network nic show --resource-group "$RESOURCE_GROUP" --name "$PROXY_NIC_NAME" >/dev/null 2>&1; then
+        echo "Proxy NIC ${PROXY_NIC_NAME} verified successfully"
+        break
+      else
+        echo "Attempt ${verify_attempt}/10: Proxy NIC ${PROXY_NIC_NAME} not found, waiting..."
+        if [ $verify_attempt -eq 10 ]; then
+          echo "ERROR: Proxy NIC ${PROXY_NIC_NAME} was not created successfully"
+          exit 1
+        fi
+        sleep 5
+      fi
+    done
+
+    echo "Creating proxy VM ${PROXY_VM_NAME} with type ${PROXY_TYPE}..."
+    az vm create \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$PROXY_VM_NAME" \
+      --nics "$PROXY_NIC_NAME" \
+      --image "$IMAGE" \
+      --security-type TrustedLaunch \
+      --size "$PROXY_TYPE" \
+      --location "$LOCATION" \
+      --enable-secure-boot false \
+      --admin-username azureuser \
+      --generate-ssh-keys
+
+    # Configure proxy VM
+    az vm run-command invoke \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$PROXY_VM_NAME" \
+      --command-id RunShellScript \
+      --scripts "mkdir -p /home/azureuser/.ssh; echo '$(cat ~/.ssh/id_rsa.pub)' > /home/azureuser/.ssh/authorized_keys; chown -R azureuser:azureuser /home/azureuser/.ssh; chmod 600 /home/azureuser/.ssh/authorized_keys; echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf; sudo sysctl -p; echo 'Proxy VM configured with IP ${PROXY_IP}'" \
+      --output none
+
+    # Wait for proxy VM to be ready
+    echo "Waiting for proxy VM ${PROXY_VM_NAME} to be fully provisioned..."
+    for attempt in {1..30}; do
+      VM_STATE=$(az vm get-instance-view \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$PROXY_VM_NAME" \
+        --query "instanceView.statuses[?code=='PowerState/running']" \
+        --output tsv 2>/dev/null)
+
+      if [[ -n "$VM_STATE" ]]; then
+        echo "Proxy VM ${PROXY_VM_NAME} is running with IP: ${PROXY_IP}"
+        break
+      fi
+
+      echo "Attempt ${attempt}/30: Proxy VM ${PROXY_VM_NAME} not ready yet, waiting..."
+      if [ $attempt -eq 30 ]; then
+        echo "ERROR: Proxy VM ${PROXY_VM_NAME} failed to start properly"
+        exit 1
+      fi
+      sleep 10
+    done
+
+    # Copy scripts to proxy VM
+    echo "Copying scripts to proxy VM ${PROXY_VM_NAME}..."
+    tar -czf /tmp/scripts_${PROXY_VM_NAME}.tar.gz -C . instance_scripts/
+    scripts_b64=$(base64 < /tmp/scripts_${PROXY_VM_NAME}.tar.gz)
+    az vm run-command invoke \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$PROXY_VM_NAME" \
+      --command-id RunShellScript \
+      --scripts "echo '${scripts_b64}' | base64 -d > /tmp/scripts.tar.gz && cd /home/azureuser && tar -xzf /tmp/scripts.tar.gz && chown -R azureuser:azureuser instance_scripts/ && rm /tmp/scripts.tar.gz" \
+      --output none
+    rm -f /tmp/scripts_${PROXY_VM_NAME}.tar.gz
+
+    echo "Proxy VM ${PROXY_VM_NAME} created and configured successfully"
+fi
 
 ################################################################################
 # Step 3: Create Azure VMs and configure each VM remotely
