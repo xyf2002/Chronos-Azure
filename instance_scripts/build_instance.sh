@@ -1,9 +1,8 @@
 #!/bin/bash
-# Usage: build_instance.sh INSTANCE_ID INSTANCE_COUNT GITHUB_USERNAME GITHUB_TOKEN
+# Usage: build_instance.sh INSTANCE_ID INSTANCE_COUNT
 INSTANCE_ID="$1"
 MACHINE_NUM="$2"
-GITHUB_USERNAME="$3"
-GITHUB_TOKEN="$4"
+
 
 # Use $HOME for logging
 exec > >(tee -a "$HOME/build.log") 2>&1
@@ -135,53 +134,73 @@ if [ -f "$HOME/.tsc_done" ] && [ ! -f "$HOME/.vm_setup_done" ]; then
     step_log "VM  = ${VM_NAME}"
     step_log "Int = ${INTERNAL_IP}"
 
-    # 4. Create VM
-    if ! sudo uvt-kvm create "${VM_NAME}" \
-            release=focal arch=amd64 \
-            --cpu 2 --memory 4096 --password 1997; then
-        echo "❌ uvt-kvm create failed, aborting"; exit 1
+    # 4. Check if VM already exists
+    if sudo virsh dominfo "${VM_NAME}" >/dev/null 2>&1; then
+        step_log "VM ${VM_NAME} already exists, skipping creation"
+    else
+        step_log "Creating new VM ${VM_NAME}"
+        # 4. Create VM
+        if ! sudo uvt-kvm create "${VM_NAME}" \
+                release=focal arch=amd64 \
+                --cpu 2 --memory 4096 --password 1997; then
+            echo "❌ uvt-kvm create failed, aborting"; exit 1
+        fi
+
+        step_log "Modifying /etc/libvirt/qemu/$VM_NAME.xml to patch CPU and clock settings"
+        VM_XML="/etc/libvirt/qemu/${VM_NAME}.xml"
+        TMP_XML="/tmp/${VM_NAME}.xml.modified"
+
+        sudo cp "$VM_XML" "$VM_XML.bak"
+
+        step_log "Deleting two lines after </features>"
+        sudo awk '
+        /<\/features>/ {
+            print;
+            skip = 2;
+            next;
+        }
+        skip > 0 {
+            skip--;
+            next;
+        }
+        { print }
+        ' "$VM_XML" > "$TMP_XML"
+
+        step_log "Inserting new <cpu> and <clock> blocks"
+        sudo sed -i "/<\/features>/a \
+    <cpu mode='host-passthrough' check='none'>\\
+      <feature policy='disable' name='rdtscp'/>\\
+      <feature policy='disable' name='tsc-deadline'/>\\
+    </cpu>\\
+    <clock offset='localtime'>\\
+      <timer name='rtc' present='no' tickpolicy='delay'/>\\
+      <timer name='pit' present='no' tickpolicy='discard'/>\\
+      <timer name='hpet' present='no'/>\\
+      <timer name='kvmclock' present='yes'/>\\
+    </clock>" "$TMP_XML"
+
+        step_log "Replacing $VM_NAME.xml with modified version and redefining domain"
+        sudo mv "$TMP_XML" "$VM_XML"
+        sudo virsh define "$VM_XML"
+
+        sudo virsh destroy "$VM_NAME"
+        sudo virsh start "$VM_NAME"
     fi
 
-     step_log "Modifying /etc/libvirt/qemu/$VM_NAME.xml to patch CPU and clock settings"
-            VM_XML="/etc/libvirt/qemu/${VM_NAME}.xml"
-            TMP_XML="/tmp/${VM_NAME}.xml.modified"
-
-            sudo cp "$VM_XML" "$VM_XML.bak"
-
-            step_log "Deleting two lines after </features>"
-            sudo awk '
-            /<\/features>/ {
-                print;
-                skip = 2;
-                next;
-            }
-            skip > 0 {
-                skip--;
-                next;
-            }
-            { print }
-            ' "$VM_XML" > "$TMP_XML"
-
-            step_log "Inserting new <cpu> and <clock> blocks"
-            sudo sed -i "/<\/features>/a \
-        <cpu mode='host-passthrough' check='none'>\\
-          <feature policy='disable' name='rdtscp'/>\\
-          <feature policy='disable' name='tsc-deadline'/>\\
-        </cpu>\\
-        <clock offset='localtime'>\\
-          <timer name='rtc' present='no' tickpolicy='delay'/>\\
-          <timer name='pit' present='no' tickpolicy='discard'/>\\
-          <timer name='hpet' present='no'/>\\
-          <timer name='kvmclock' present='yes'/>\\
-        </clock>" "$TMP_XML"
-
-            step_log "Replacing $VM_NAME.xml with modified version and redefining domain"
-            sudo mv "$TMP_XML" "$VM_XML"
-            sudo virsh define "$VM_XML"
-
-            sudo virsh destroy "$VM_NAME"
-            sudo virsh start "$VM_NAME"
-
+#    # Ensure VM is running regardless of whether it was just created or already existed
+#    VM_STATE=$(sudo virsh domstate "${VM_NAME}" 2>/dev/null || echo "shut off")
+#    if [[ "$VM_STATE" != "running" ]]; then
+#        step_log "Starting existing VM ${VM_NAME}"
+#        sudo virsh start "${VM_NAME}" || true
+#
+#        # Wait for VM to start
+#        for i in $(seq 1 60); do
+#            state=$(sudo virsh domstate "${VM_NAME}" 2>/dev/null) || state="unknown"
+#            echo "⏳ Waiting for ${VM_NAME} to start... (${i}/60) → state: ${state}"
+#            [[ "$state" == "running" ]] && break
+#            sleep 2
+#        done
+#    fi
 
     # --------------------------------------------------------------------- #
         # 3. Waiting domifaddr return real MAC/IP

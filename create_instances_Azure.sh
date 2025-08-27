@@ -29,7 +29,7 @@ INSTANCE_COUNT=1
 VM_NAME_PREFIX="ins"
 PROXY_TYPE=""
 PROXY_ENABLED=false
-PROXY_IP="10.4.1.1"
+PROXY_IP="10.4.1.5"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -275,7 +275,7 @@ fi
 
 # Optional: Quick status check without blocking
 echo "Current Bastion status check..."
-CURRENT_STATE=$(az network bastion show --resource-group "$RESOURCE_GROUP" --name "$BASTION_NAME" --query "provisioningState" -o tsv 2>/dev/null || echo "Not found or creating")
+CURRENT_STATE=$(az network.bastion show --resource-group "$RESOURCE_GROUP" --name "$BASTION_NAME" --query "provisioningState" -o tsv 2>/dev/null || echo "Not found or creating")
 echo "Bastion ${BASTION_NAME} current state: $CURRENT_STATE"
 
 # Create NAT Gateway Public IP
@@ -444,7 +444,7 @@ if [ "$PROXY_ENABLED" = true ]; then
       --vm-name "$PROXY_VM_NAME" \
       --name CustomScript \
       --publisher Microsoft.Azure.Extensions \
-      --settings '{"commandToExecute":"cd /home/azureuser && chmod +x instance_scripts/build_proxy.sh && ./instance_scripts/build_proxy.sh"}' \
+      --settings "{\"commandToExecute\":\"cd /home/azureuser  ./instance_scripts/build_proxy.sh '${GITHUB_TOKEN}' '${INSTANCE_COUNT}' '${GITHUB_USERNAME}'\"}" \
       --no-wait
 
     echo "Proxy VM ${PROXY_VM_NAME} created and configured successfully with build_proxy.sh execution initiated"
@@ -690,7 +690,7 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
       --vm-name "$VM_NAME" \
       --name CustomScript \
       --publisher Microsoft.Azure.Extensions \
-      --settings '{"commandToExecute":"cd /home/azureuser &&  ./instance_scripts/build_instance.sh"}' \
+      --settings "{\"commandToExecute\":\"cd /home/azureuser &&  ./instance_scripts/build_instance.sh '${INSTANCE_ID}' '${INSTANCE_COUNT}' \"}" \
       --no-wait
 
   ) &
@@ -702,4 +702,3 @@ wait || echo "Some background jobs failed or were killed."
 # Step 6: All Azure VM creation and configuration commands executed.
 ################################################################################
 echo "All Azure VM creation and configuration commands executed."
-

@@ -33,15 +33,16 @@ git clone --quiet "${phobos_link}" ~/phobos-proxy
 cd ~/phobos-proxy
 
 # Add routes to instance networks
-# Proxy (10.4.1.1) needs to route to instance networks (10.1.x.x and 10.3.x.x)
+# Proxy (10.4.1.5) needs to route to instance networks (10.1.x.x and 10.3.x.x)
+# The gateway for proxy subnet 10.4.1.0/24 is 10.4.1.1
 for (( i=0; i<NUM_MACHINE; i++ )); do
-  # Route to first NIC subnet (10.1.i.0/24) via main gateway
+  # Route to first NIC subnet (10.1.i.0/24) via proxy subnet gateway
   echo "Adding route: 10.1.${i}.0/24 via 10.4.1.1"
-  sudo ip route add 10.1."${i}".0/24 via 10.0.1.1 dev eth0 || echo "Route to 10.1.${i}.0/24 may already exist"
+  sudo ip route add 10.1."${i}".0/24 via 10.4.1.1 dev eth0 || echo "Route to 10.1.${i}.0/24 may already exist"
 
-  # Route to second NIC subnet (10.3.i.0/24) via main gateway
-  echo "Adding route: 10.3.${i}.0/24 via 10.0.1.1"
-  sudo ip route add 10.3."${i}".0/24 via 10.0.1.1 dev eth0 || echo "Route to 10.3.${i}.0/24 may already exist"
+  # Route to second NIC subnet (10.3.i.0/24) via proxy subnet gateway
+  echo "Adding route: 10.3.${i}.0/24 via 10.4.1.1"
+  sudo ip route add 10.3."${i}".0/24 via 10.4.1.1 dev eth0 || echo "Route to 10.3.${i}.0/24 may already exist"
 done
 
 make -j
