@@ -15,12 +15,12 @@ primary_if=$(ip -o -4 addr \
 
 # 2. Derive the /24 network prefix (e.g. 192.168.10)
 prefix=$(ip -o -4 addr show "$primary_if" \
-           | awk '$4 ~ /\.6\/24$/ {sub(/\.6\/24/,"",$4); print $4}')
+           | awk '$4 ~ /\.7\/24$/ {sub(/\.7\/24/,"",$4); print $4}')
 
 echo "Interface: $primary_if  —  Network: ${prefix}.0/24"
 
 # 3. Add .6-.254
-for i in $(seq 7 254); do
+for i in $(seq 8 254); do
   ip addr add "${prefix}.${i}/24" dev "$primary_if" 2>/dev/null \
     && echo "Added ${prefix}.${i}" \
     || echo "⚠️  ${prefix}.${i} already present or failed"

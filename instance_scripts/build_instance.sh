@@ -10,7 +10,7 @@ echo "Log file stored at: $HOME/build.log"
 
 # ======= Network Setup Variables =======
 INTERNAL_SUBNET=$((INSTANCE_ID))
-INTERNAL_IP="10.2.${INTERNAL_SUBNET}.6"
+INTERNAL_IP="10.2.${INTERNAL_SUBNET}.7"
 NET_GW_IP="10.2.${INTERNAL_SUBNET}.1"
 RANGE_START="10.2.${INTERNAL_SUBNET}.2"
 RANGE_END="10.2.${INTERNAL_SUBNET}.254"
@@ -396,7 +396,7 @@ if [ -f "$HOME/.net_setup_done" ] && [ ! -f "$HOME/.k0s_in_vm_done" ]; then
         step_log "Running master k0s install script" ""
         ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} "bash /tmp/master_install_k0.sh"
     else
-        ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} "bash /tmp/worker_install_k0.sh 10.2.0.6"
+        ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} "bash /tmp/worker_install_k0.sh 10.2.0.7"
     fi
     sudo gcc -pthread ~/instance_scripts/slotcheckerservice.c -o slotcheckerservice
     sudo cp ~/instance_scripts/slotcheckerservice.service /etc/systemd/system/slotcheckerservice.service
