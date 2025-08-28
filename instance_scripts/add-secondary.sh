@@ -34,7 +34,7 @@ while IFS=' ' read -r iface cidr; do
   done
 done < <(
   # one line per eth interface with an IPv4 address
-  ip -o -4 addr show | awk '$2 ~ /^eth/ {print $2, $4}' | head -10
+  ip -o -4 addr show | awk '$2 ~ /^eth0/ {print $2, $4}' | head -10
 )
 
 echo "Secondary IP assignment completed."

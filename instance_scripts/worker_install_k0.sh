@@ -16,7 +16,7 @@ fi
 remote="ubuntu@${CTL_IP}:~/token-file"
 target="/home/ubuntu/token-file"
 delay=5
-max_attempts=10
+max_attempts=10000
 attempt=1
 password="1997"
 

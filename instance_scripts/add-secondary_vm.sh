@@ -7,20 +7,20 @@ set -euo pipefail
 
 # 1. Discover the interface that owns *.2
 primary_if=$(ip -o -4 addr \
-               | awk '$4 ~ /\.2\/24$/ {print $2; exit}')
+               | awk '$4 ~ /\.6\/24$/ {print $2; exit}')
 [[ -z $primary_if ]] && {
-  echo "Couldn’t find an interface with x.x.x.2/24" >&2
+  echo "Couldn’t find an interface with x.x.x.6/24" >&2
   exit 1
 }
 
 # 2. Derive the /24 network prefix (e.g. 192.168.10)
 prefix=$(ip -o -4 addr show "$primary_if" \
-           | awk '$4 ~ /\.5\/24$/ {sub(/\.2\/24/,"",$4); print $4}')
+           | awk '$4 ~ /\.6\/24$/ {sub(/\.6\/24/,"",$4); print $4}')
 
 echo "Interface: $primary_if  —  Network: ${prefix}.0/24"
 
 # 3. Add .6-.254
-for i in $(seq 6 254); do
+for i in $(seq 7 254); do
   ip addr add "${prefix}.${i}/24" dev "$primary_if" 2>/dev/null \
     && echo "Added ${prefix}.${i}" \
     || echo "⚠️  ${prefix}.${i} already present or failed"
