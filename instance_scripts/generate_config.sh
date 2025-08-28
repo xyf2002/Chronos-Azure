@@ -25,18 +25,18 @@ outfile=${2:-nodes.json}    # destination file
 
 # open the root object
 
-for node in $(seq 1  $((nodes))); do
+for node in $(seq 0  $((nodes - 1))); do
     right_net=$node
-    left_net=$(( node + 9 ))
+    left_net=$(( node  ))
 
     # Get hostname and strip trailing number
     host=$(hostname)
     base_host=${host%%[0-9]*}  # Removes everything from first digit onwards
 
     # open this node’s object
-    printf '%s%d: {' "$base_host" "$((node - 1))" >> "$outfile"
+    printf '%s%d: {' "$base_host" "$((node ))" >> "$outfile"
   # open this node’s object
-  printf 'node%d: {' "$((node-1))" >> "$outfile"
+  printf 'node%d: {' "$((node))" >> "$outfile"
 
   for host in $(seq 6 254); do
     left_ip="10.1.${left_net}.${host}"
