@@ -30,6 +30,7 @@ VM_NAME_PREFIX="ins"
 PROXY_TYPE=""
 PROXY_ENABLED=false
 PROXY_IP="10.4.1.5"
+DISK_SIZE=30  # Default disk size in GB
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -38,7 +39,7 @@ while [[ $# -gt 0 ]]; do
             echo "create_instances_Azure.sh - create Azure VMs and configure Chronos experiment"
             echo ""
             echo "Usage:"
-            echo "  ./create_instances_Azure.sh --resource-group <resource-group> --location <location> --vm-size <vm-size> --instance-count <count> [--secondary-ip-count <count>] [--vm-per-instance <count>] [--proxy-type <type>]"
+            echo "  ./create_instances_Azure.sh --resource-group <resource-group> --location <location> --vm-size <vm-size> --instance-count <count> [--secondary-ip-count <count>] [--vm-per-instance <count>] [--proxy-type <type>] [--disk-size <size>]"
             echo ""
             echo "Options:"
             echo "  --help, -h                      Show this help message and exit"
@@ -50,9 +51,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --vm-per-instance <count>        Number of QEMU VMs per Azure VM (default: 2)"
             echo "  --vm-name-prefix <prefix>        Prefix for VM names (default: ins)"
             echo "  --proxy-type <type>             VM size for proxy machine (enables proxy creation)"
+            echo "  --disk-size <size>              OS disk size in GB (default: 30)"
             echo ""
             echo "Example:"
-            echo "  ./create_instances_Azure.sh --resource-group chronos-test --location uksouth --vm-size Standard_D2s_v3 --instance-count 2 --secondary-ip-count 2 --proxy-type Standard_D2s_v3"
+            echo "  ./create_instances_Azure.sh --resource-group chronos-test --location uksouth --vm-size Standard_D2s_v3 --instance-count 2 --secondary-ip-count 2 --proxy-type Standard_D2s_v3 --disk-size 50"
             exit 0
             ;;
         --resource-group)
@@ -119,6 +121,14 @@ while [[ $# -gt 0 ]]; do
         --proxy-type=*)
             PROXY_TYPE="${1#*=}"
             PROXY_ENABLED=true
+            shift
+            ;;
+        --disk-size)
+            DISK_SIZE="$2"
+            shift 2
+            ;;
+        --disk-size=*)
+            DISK_SIZE="${1#*=}"
             shift
             ;;
         *)
@@ -393,7 +403,8 @@ if [ "$PROXY_ENABLED" = true ]; then
       --location "$LOCATION" \
       --enable-secure-boot false \
       --admin-username azureuser \
-      --generate-ssh-keys
+      --generate-ssh-keys \
+      --os-disk-size-gb "$DISK_SIZE"
 
     # Configure proxy VM
     az vm run-command invoke \
@@ -619,7 +630,8 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
       --location "$LOCATION" \
       --enable-secure-boot false \
       --admin-username azureuser \
-      --generate-ssh-keys
+      --generate-ssh-keys \
+      --os-disk-size-gb "$DISK_SIZE"
 
     # Enable IP forwarding on both NICs
     for NIC_NAME in "$NIC_NAME_1" "$NIC_NAME_2"; do
@@ -684,16 +696,16 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
     echo "STARTING KERNEL BUILD AND CONFIGURATION ON ${VM_NAME}"
 
     # Execute build_instance.sh using VM extension
-    echo "Executing build_instance.sh on ${VM_NAME} using VM extension..."
-    az vm extension set \
-      --resource-group "$RESOURCE_GROUP" \
-      --vm-name "$VM_NAME" \
-      --name CustomScript \
-      --publisher Microsoft.Azure.Extensions \
-      --settings "{\"commandToExecute\":\"cd /home/azureuser &&  ./instance_scripts/build_instance.sh '${INSTANCE_ID}' '${INSTANCE_COUNT}' \"}" \
-      --no-wait
+#    echo "Executing build_instance.sh on ${VM_NAME} using VM extension..."
+#    az vm extension set \
+#      --resource-group "$RESOURCE_GROUP" \
+#      --vm-name "$VM_NAME" \
+#      --name CustomScript \
+#      --publisher Microsoft.Azure.Extensions \
+#      --settings "{\"commandToExecute\":\" sudo su azureuser -c 'cd /home/azureuser && sudo ./instance_scripts/build_instance.sh '${INSTANCE_ID}' '${INSTANCE_COUNT}' '  \"}"
 
   ) &
+
 done
 
 wait || echo "Some background jobs failed or were killed."
