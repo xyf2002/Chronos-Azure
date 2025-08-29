@@ -3,10 +3,12 @@
 INSTANCE_ID="$1"
 MACHINE_NUM="$2"
 
+# Define Azure user home directory
+AZURE_USER_HOME="/home/azureuser"
 
-# Use $HOME for logging
-exec > >(tee -a "$HOME/build.log") 2>&1
-echo "Log file stored at: $HOME/build.log"
+# Use $AZURE_USER_HOME for logging
+exec > >(tee -a "$AZURE_USER_HOME/build.log") 2>&1
+echo "Log file stored at: $AZURE_USER_HOME/build.log"
 
 # ======= Network Setup Variables =======
 INTERNAL_SUBNET=$((INSTANCE_ID))
@@ -15,8 +17,11 @@ NET_GW_IP="10.2.${INTERNAL_SUBNET}.1"
 RANGE_START="10.2.${INTERNAL_SUBNET}.2"
 RANGE_END="10.2.${INTERNAL_SUBNET}.254"
 EXPOSED_IP="10.1.${INSTANCE_ID}.1"
+VM_NAME="ins${INSTANCE_ID}"
+
 echo "Instance_ID: ${INSTANCE_ID}, MACHINE_NUM: ${MACHINE_NUM}"
 echo "Internal Subnet: 10.2.${INTERNAL_SUBNET}.0/24, Internal IP: ${INTERNAL_IP}"
+echo "VM Name: ${VM_NAME}"
 
 # ======= Integrated build_kernel script begins =======
 # Define step_log function with clear separators
@@ -30,23 +35,23 @@ step_log() {
 
 # Step 0: Initialization
 step_log "Step 0: Initialization" "Starting integrated build_kernel process"
-touch "$HOME/.kernel_done" "$HOME/.rebooted"
+touch "$AZURE_USER_HOME/.kernel_done" "$AZURE_USER_HOME/.rebooted"
 
 # Step 1: Kernel Build logic commented out
 step_log "Step 1: Kernel Build, already done"
 # : <<'END_KERNEL_BUILD'
 # ...existing kernel build commands...
 # END_KERNEL_BUILD
-touch "$HOME/.kernel_done"
-touch "$HOME/.rebooted"
+touch "$AZURE_USER_HOME/.kernel_done"
+touch "$AZURE_USER_HOME/.rebooted"
 
 ################################################################################
 # Step 2: After Reboot, build & insert fake_tsc
 ################################################################################
-if [ -f "$HOME/.kernel_done" ] && [ -f "$HOME/.rebooted" ] && [ ! -f "$HOME/.tsc_done" ]; then
+if [ -f "$AZURE_USER_HOME/.kernel_done" ] && [ -f "$AZURE_USER_HOME/.rebooted" ] && [ ! -f "$AZURE_USER_HOME/.tsc_done" ]; then
     step_log "Step 2: After reboot - Build and insert fake_tsc module" ""
-    rm -f "$HOME/.rebooted"
-    cd "$HOME"
+    rm -f "$AZURE_USER_HOME/.rebooted"
+    cd "$AZURE_USER_HOME"
     # If build tools (gcc & make) not found, install them
     if ! command -v gcc >/dev/null 2>&1 || ! command -v make >/dev/null 2>&1; then
         step_log "Installing build-essential package" "Installing required build tools..."
@@ -71,8 +76,8 @@ if [ -f "$HOME/.kernel_done" ] && [ -f "$HOME/.rebooted" ] && [ ! -f "$HOME/.tsc
     step_log "Building fake_tsc module" ""; sudo make -C /lib/modules/$(uname -r)/build M=$PWD modules
     step_log "Inserting custom_tsc.ko" ""; sudo insmod custom_tsc.ko; sudo modprobe kvm; sudo modprobe kvm_intel; sudo ./init; sudo ./init
     step_log "Installing additional libs and verifying fake_tsc module" ""; sudo apt-get install -yqq libsctp-dev lksctp-tools zlib1g-dev; sudo modprobe sctp; sudo lsmod | grep custom_tsc || echo 'Warning: custom_tsc not loaded'; sudo dmesg | tail -n 20
-    cp ~/instance_scripts/slotcheckerservice.c ./; gcc slotcheckerservice.c -o slotcheckerservice
-    touch "$HOME/.tsc_done"
+    cp $AZURE_USER_HOME/instance_scripts/slotcheckerservice.c ./; gcc slotcheckerservice.c -o slotcheckerservice
+    touch "$AZURE_USER_HOME/.tsc_done"
 fi
 
 # Step 3: VM Setup
@@ -84,7 +89,7 @@ step_log "Step 3: VM Setup"
 #   – $HOME/.tsc_done exists
 #   – $HOME/.vm_setup_done NOT exists
 ################################################################################
-if [ -f "$HOME/.tsc_done" ] && [ ! -f "$HOME/.vm_setup_done" ]; then
+if [ -f "$AZURE_USER_HOME/.tsc_done" ] && [ ! -f "$AZURE_USER_HOME/.vm_setup_done" ]; then
     step_log "Installing virtualization tools and creating VM (uvt-kvm + static MAC)"
 
     # 1. Packages
@@ -125,11 +130,9 @@ if [ -f "$HOME/.tsc_done" ] && [ ! -f "$HOME/.vm_setup_done" ]; then
     fi
     sudo virsh net-start default || echo "Network already started"
 
-    # 3. Names & deterministic IP/MAC
-    VM_NAME="ins${INSTANCE_ID}"
 
     #step_log "Changing default storage location"
-   # sudo $HOME/repository/instance_scripts/change_storage.sh
+   # sudo $AZURE_USER_HOME/repository/instance_scripts/change_storage.sh
 
     step_log "VM  = ${VM_NAME}"
     step_log "Int = ${INTERNAL_IP}"
@@ -323,7 +326,7 @@ if [ -f "$HOME/.tsc_done" ] && [ ! -f "$HOME/.vm_setup_done" ]; then
         sleep 2
     done
     [[ "${cur_ip}" != "${INTERNAL_IP}" ]] && echo "⚠️  VM IP is ${cur_ip:-N/A}, expected ${INTERNAL_IP}"
-    touch "$HOME/.vm_setup_done"
+    touch "$AZURE_USER_HOME/.vm_setup_done"
 fi
 
 ################################################################################
@@ -333,7 +336,7 @@ fi
 #   – $HOME/.vm_setup_done   exists  (VM created)
 #   – $HOME/.net_setup_done  NOT     exists (NAT not yet written)
 ################################################################################
-if [ -f "$HOME/.vm_setup_done" ] && [ ! -f "$HOME/.net_setup_done" ]; then
+if [ -f "$AZURE_USER_HOME/.vm_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.net_setup_done" ]; then
     step_log "Setting alias IP and NAT rules for this host"
     state=$(sudo virsh domstate "${VM_NAME}" 2>/dev/null) || true
     echo "⏳ Checking state of ${VM_NAME} to shut off... (${i}/20) -> state: ${state}"
@@ -344,36 +347,36 @@ if [ -f "$HOME/.vm_setup_done" ] && [ ! -f "$HOME/.net_setup_done" ]; then
         [[ "$state" == "running" ]] && break
         sleep 1
     done
-    cd ~/instance_scripts
+    cd $AZURE_USER_HOME/instance_scripts
     step_log "Adding ips"
-    sudo ~/instance_scripts/add-secondary.sh
+    sudo $AZURE_USER_HOME/instance_scripts/add-secondary.sh
     sleep 5
     step_log "Generating json"
-    sudo ~/instance_scripts/generate_config.sh $MACHINE_NUM
+    sudo $AZURE_USER_HOME/instance_scripts/generate_config.sh $MACHINE_NUM
     sleep 5
     step_log "Adding IP TABLES"
-    sudo ~/instance_scripts/set_ip.sh
+    sudo $AZURE_USER_HOME/instance_scripts/set_ip.sh
     sleep 5
     step_log "Installing ssh pass"
     sudo apt-get -y install sshpass
     password="1997"
     SSH_OPTS="-oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
     step_log "create ssh keys"
-    ssh-keygen -q -t rsa -N '' -f ~/.ssh/id_rsa
+    ssh-keygen -q -t rsa -N '' -f $AZURE_USER_HOME/.ssh/id_rsa
     step_log "Copying ssh keys"
     sshpass -p $password ssh-copy-id $SSH_OPTS ubuntu@${INTERNAL_IP}
 
     step_log "Copying script to add ip address"
-    scp $SSH_OPTS ~/instance_scripts/add-secondary_vm.sh ubuntu@${INTERNAL_IP}:~/
+    scp $SSH_OPTS $AZURE_USER_HOME/instance_scripts/add-secondary_vm.sh ubuntu@${INTERNAL_IP}:~/
     step_log "calling copied script"
     ssh $SSH_OPTS ubuntu@${INTERNAL_IP}  "sudo /home/ubuntu/add-secondary_vm.sh"
-    touch $HOME/.net_setup_done
+    touch $AZURE_USER_HOME/.net_setup_done
 fi
 
 ################################################################################
 # Step 5: Install k0s inside the VM
 ################################################################################
-if [ -f "$HOME/.net_setup_done" ] && [ ! -f "$HOME/.k0s_in_vm_done" ]; then
+if [ -f "$AZURE_USER_HOME/.net_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.k0s_in_vm_done" ]; then
     step_log "Step 5: Installing k0s inside the VM" ""
     if ! command -v sshpass >/dev/null 2>&1; then
         step_log "Installing sshpass" ""; sudo apt-get install -y sshpass
@@ -381,14 +384,14 @@ if [ -f "$HOME/.net_setup_done" ] && [ ! -f "$HOME/.k0s_in_vm_done" ]; then
 
     if [ "${INSTANCE_ID}" -eq "0" ]; then
         step_log "Copying master k0s install script to VM" ""
-        scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ~/instance_scripts/master_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
+        scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null $AZURE_USER_HOME/instance_scripts/master_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
     else
         step_log "Copying worker k0s install script to VM" ""
-        scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ~/instance_scripts/worker_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
+        scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null $AZURE_USER_HOME/instance_scripts/worker_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
     fi
 
     step_log "Copying common k0s helper script to VM" ""
-    scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ~/instance_scripts/common_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
+    scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null $AZURE_USER_HOME/instance_scripts/common_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
 
     step_log "Creating SSH keys on VM" ""
     ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} "mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -q -t rsa -N \"\" -f ~/.ssh/id_rsa"
@@ -398,10 +401,10 @@ if [ -f "$HOME/.net_setup_done" ] && [ ! -f "$HOME/.k0s_in_vm_done" ]; then
     else
         ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} "bash /tmp/worker_install_k0.sh 10.2.0.7"
     fi
-    sudo gcc -pthread ~/instance_scripts/slotcheckerservice.c -o slotcheckerservice
-    sudo cp ~/instance_scripts/slotcheckerservice.service /etc/systemd/system/slotcheckerservice.service
+    sudo gcc -pthread $AZURE_USER_HOME/instance_scripts/slotcheckerservice.c -o slotcheckerservice
+    sudo cp $AZURE_USER_HOME/instance_scripts/slotcheckerservice.service /etc/systemd/system/slotcheckerservice.service
     sudo systemctl daemon-reload; sudo systemctl enable slotcheckerservice; sudo systemctl start slotcheckerservice
-    touch "$HOME/.k0s_in_vm_done"
+    touch "$AZURE_USER_HOME/.k0s_in_vm_done"
 fi
 
 # Step 6: All done

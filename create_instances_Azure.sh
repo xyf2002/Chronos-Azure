@@ -696,13 +696,13 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
     echo "STARTING KERNEL BUILD AND CONFIGURATION ON ${VM_NAME}"
 
     # Execute build_instance.sh using VM extension
-#    echo "Executing build_instance.sh on ${VM_NAME} using VM extension..."
-#    az vm extension set \
-#      --resource-group "$RESOURCE_GROUP" \
-#      --vm-name "$VM_NAME" \
-#      --name CustomScript \
-#      --publisher Microsoft.Azure.Extensions \
-#      --settings "{\"commandToExecute\":\" sudo su azureuser -c 'cd /home/azureuser && sudo ./instance_scripts/build_instance.sh '${INSTANCE_ID}' '${INSTANCE_COUNT}' '  \"}"
+    echo "Executing build_instance.sh on ${VM_NAME} using VM extension..."
+    az vm extension set \
+      --resource-group "$RESOURCE_GROUP" \
+      --vm-name "$VM_NAME" \
+      --name CustomScript \
+      --publisher Microsoft.Azure.Extensions \
+      --settings "{\"commandToExecute\": \"su - azureuser -c 'cd /home/azureuser && ./instance_scripts/build_instance.sh $INSTANCE_ID $INSTANCE_COUNT'\"}"
 
   ) &
 

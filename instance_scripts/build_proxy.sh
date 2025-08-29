@@ -1,5 +1,9 @@
 #!/bin/bash
-exec >> $HOME/build.log
+
+# Define Azure user home directory
+AZURE_USER_HOME="/home/azureuser"
+
+exec >> $AZURE_USER_HOME/build.log
 exec 2>&1
 # Color output
 GREEN=$'\033[0;32m'
@@ -29,8 +33,8 @@ kernel_repo="andrewferguson/phobos-proxy"
   sudo apt-get install -yqq libsctp-dev lksctp-tools  zlib1g-dev
   sudo modprobe sctp
 phobos_link="https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/${kernel_repo}.git"
-git clone --quiet "${phobos_link}" ~/phobos-proxy
-cd ~/phobos-proxy
+git clone --quiet "${phobos_link}" $AZURE_USER_HOME/phobos-proxy
+cd $AZURE_USER_HOME/phobos-proxy
 
 # Add routes to instance networks
 # Proxy (10.4.1.5) needs to route to instance networks (10.1.x.x and 10.3.x.x)
