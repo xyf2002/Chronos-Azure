@@ -697,12 +697,12 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
 
     # Execute build_instance.sh using VM extension
     echo "Executing build_instance.sh on ${VM_NAME} using VM extension..."
-    az vm extension set \
-      --resource-group "$RESOURCE_GROUP" \
-      --vm-name "$VM_NAME" \
-      --name CustomScript \
-      --publisher Microsoft.Azure.Extensions \
-      --settings "{\"commandToExecute\": \"su - azureuser -c 'cd /home/azureuser && ./instance_scripts/build_instance.sh $INSTANCE_ID $INSTANCE_COUNT'\"}"
+#    az vm extension set \
+#      --resource-group "$RESOURCE_GROUP" \
+#      --vm-name "$VM_NAME" \
+#      --name CustomScript \
+#      --publisher Microsoft.Azure.Extensions \
+#      --settings "{\"commandToExecute\": \"su - azureuser -c 'cd /home/azureuser && ./instance_scripts/build_instance.sh $INSTANCE_ID $INSTANCE_COUNT'\"}"
 
   ) &
 
