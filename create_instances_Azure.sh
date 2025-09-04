@@ -251,6 +251,8 @@ fi
 
 # Check if Bastion already exists
 BASTION_STATE=$(az network bastion show --resource-group "$RESOURCE_GROUP" --name "$BASTION_NAME" --query "provisioningState" -o tsv 2>/dev/null)
+# Fix for WSL
+BASTION_STATE=$(echo "$BASTION_STATE" | tr -d '\r')
 if [[ "$BASTION_STATE" == "Succeeded" ]]; then
   echo "Azure Bastion ${BASTION_NAME} already exists and is ready (state: $BASTION_STATE)."
 elif [[ -n "$BASTION_STATE" ]] && [[ "$BASTION_STATE" != "Failed" ]]; then

@@ -361,6 +361,8 @@ indented az vm create \
 info "Waiting for VM to be provisioned..."
 while true; do
     vm_state=$(az vm show --resource-group "${resource_group}" --name "${vm_name}" --query "provisioningState" -o tsv)
+    # Fix for WSL
+    vm_state=$(echo "$vm_state" | tr -d '\r')
     if [ "$vm_state" = "Succeeded" ]; then
         success "VM provisioned successfully"
         break
@@ -441,6 +443,8 @@ for attempt in {1..20}; do
         --name "${vm_name}" \
         --query "instanceView.statuses[?code=='PowerState/running']" \
         --output tsv 2>/dev/null)
+    # Fix for WSL
+    vm_state=$(echo "$vm_state" | tr -d '\r')
 
     if [[ -n "$vm_state" ]]; then
         info "VM is running (attempt $attempt/20)"
