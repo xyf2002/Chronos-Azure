@@ -413,19 +413,12 @@ az vm extension show \
   --output tsv
 
 # Use Custom Script Extension to update initramfs and grub
-#info "Updating initramfs and grub for custom kernel"
-#indented az vm extension set \
-#    --resource-group "${resource_group}" \
-#    --vm-name "${vm_name}" \
-#    --name customScript \
-#    --publisher Microsoft.Azure.Extensions \
-#    --settings "{\"commandToExecute\": \"sudo update-initramfs -c -k all && sudo update-grub\"}"
 indented az vm extension set \
     --resource-group "${resource_group}" \
     --vm-name "${vm_name}" \
     --name customScript \
     --publisher Microsoft.Azure.Extensions \
-    --settings "{\"commandToExecute\": \"sudo sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=\\\"Advanced options for Ubuntu>Ubuntu, with Linux 5.15.160+\\\"/' /etc/default/grub && sudo update-initramfs -c -k all && sudo update-grub\"}"
+    --settings "{\"commandToExecute\": \"echo nvme | sudo tee -a /etc/initramfs-tools/modules && sudo update-initramfs -c -k all && sudo update-grub\"}"
 
 # Use Custom Script Extension to reboot the VM
 info "Rebooting instance"
