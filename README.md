@@ -34,11 +34,16 @@ This script creates a development VM in Azure, clones, builds, and installs the 
 **Full example:**
 ```bash
 ./create_image_Azure.sh dummy-project-id \
-  --resource-group=chronos-test \
-  --machine-type=Standard_D4s_v4 \
-  --disk-size=30 \
+  --resource-group=chronos-template \
+  --machine-type=Standard_D128s_v6 \
+  --disk-size=300 \
   --zone=uksouth
 ```
+After that:
+- Make sure you enable boot logging so serial port debugging would work. At the moment, this has to be done through the portal, it is not automatized. 
+- Assign the appropriate RBAC using rbac.ps1
+- Create a keyvault in the resource group (manually), and use add_key_to_vault.sh to upload the SSH private key for the servers.
+- Upload public keys to all servers (needs to be done manually)
 
 ---
 
