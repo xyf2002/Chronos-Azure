@@ -1,13 +1,15 @@
 #!/bin/bash
 set -eou pipefail
 # Create a GCP base image with the Chronos kernel modules
-source_image="Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
+#source_image="Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
+source_image="Canonical:0001-com-ubuntu-server-focal:20_04-lts-gen2:latest"
+
 #zone="europe-west4-a"
 zone="uksouth"
 image_description="Auto-generated Chronos Base Image"
 machine_type="Standard_D4s_v3"
 ssh_username="azureuser"
-disk_size=30
+disk_size=300
 
 # Network configuration
 vnet_name="myVnet"
@@ -512,7 +514,9 @@ if ! az sig image-definition show --resource-group "${resource_group}" --gallery
         --os-type Linux \
         --os-state generalized \
         --hyper-v-generation V2 \
-        --features SecurityType=TrustedLaunch #securityType should be set same as the VM
+        --features DiskControllerTypes=SCSI,NVMe
+        #SecurityType=Standard
+        #securityType should be set same as the VM
 fi
 
 # Get the VM ID

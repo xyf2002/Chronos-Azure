@@ -24,13 +24,17 @@ RESOURCE_GROUP="chronos-test"
 LOCATION="uksouth"
 VM_SIZE="Standard_D2s_v3"
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-IMAGE="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/chronos-test/providers/Microsoft.Compute/galleries/chronosGallery/images/chronosBaseImage/versions/1.0.0"
+#IMAGE="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/chronos-test/providers/Microsoft.Compute/galleries/chronosGallery/images/chronosBaseImage/versions/1.0.0"
+#IMAGE="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/chronos-template/providers/Microsoft.Compute/galleries/chronosGalleryTemplate/images/chronosBaseImage/versions/1.0.0"
+standard_image="Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
+IMAGE="Canonical:0001-com-ubuntu-server-focal:20_04-lts-gen2:latest"
+
 INSTANCE_COUNT=1
 VM_NAME_PREFIX="ins"
 PROXY_TYPE=""
 PROXY_ENABLED=false
 PROXY_IP="10.4.1.5"
-DISK_SIZE=30  # Default disk size in GB
+DISK_SIZE=300  # Default disk size in GB
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -400,13 +404,20 @@ if [ "$PROXY_ENABLED" = true ]; then
       --name "$PROXY_VM_NAME" \
       --nics "$PROXY_NIC_NAME" \
       --image "$IMAGE" \
-      --security-type TrustedLaunch \
+      --security-type Standard \
       --size "$PROXY_TYPE" \
       --location "$LOCATION" \
-      --enable-secure-boot false \
       --admin-username azureuser \
-      --generate-ssh-keys \
+      --ssh-key-values azure-key.pub \
+      --os-disk-name "${PROXY_VM_NAME}-osdisk" \
       --os-disk-size-gb "$DISK_SIZE"
+
+    # TBD: This doesn't work
+    # Ensure boot diagnostics (standard boot log) are enabled for the proxy VM
+    # az vm update \
+    #  --resource-group "$RESOURCE_GROUP" \
+    #  --name "$PROXY_VM_NAME" \
+    #  --set diagnosticsProfile.bootDiagnostics.enabled=true
 
     # Configure proxy VM
     az vm run-command invoke \
@@ -627,13 +638,20 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
       --name "$VM_NAME" \
       --nics "$NIC_NAME_1" "$NIC_NAME_2" \
       --image "$IMAGE" \
-      --security-type TrustedLaunch \
+      --security-type Standard \
       --size "$VM_SIZE" \
       --location "$LOCATION" \
-      --enable-secure-boot false \
       --admin-username azureuser \
-      --generate-ssh-keys \
+      --ssh-key-values azure-key.pub \
+      --os-disk-name "${VM_NAME}-osdisk" \
       --os-disk-size-gb "$DISK_SIZE"
+
+    # TBD: This doesn't work
+    # Ensure boot diagnostics (standard boot log) are enabled for the VM
+    # az vm update \
+    #   --resource-group "$RESOURCE_GROUP" \
+    #   --name "$VM_NAME" \
+    #   --set diagnosticsProfile.bootDiagnostics.enabled=true
 
     # Enable IP forwarding on both NICs
     for NIC_NAME in "$NIC_NAME_1" "$NIC_NAME_2"; do
