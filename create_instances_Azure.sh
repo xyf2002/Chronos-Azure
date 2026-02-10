@@ -16,6 +16,31 @@ fi
 echo "Using GitHub user: ${GITHUB_USERNAME}"
 
 ################################################################################
+# Step 1.5: Setup SSH keys
+################################################################################
+SSH_KEY_FILE="$HOME/.ssh/id_rsa"
+SSH_PUB_KEY_FILE="$HOME/.ssh/id_rsa.pub"
+AZURE_KEY_FILE="./azure-key"
+AZURE_KEY_PUB_FILE="./azure-key.pub"
+
+# Check if local SSH keys exist, if not generate them
+if [ ! -f "$SSH_KEY_FILE" ]; then
+    echo "Generating local SSH keys at $SSH_KEY_FILE..."
+    mkdir -p "$HOME/.ssh"
+    ssh-keygen -t rsa -b 4096 -f "$SSH_KEY_FILE" -N "" -C "azure-vm-key"
+    chmod 600 "$SSH_KEY_FILE"
+    chmod 644 "$SSH_PUB_KEY_FILE"
+fi
+
+# Create a copy of the public key for Azure use if it doesn't exist
+if [ ! -f "$AZURE_KEY_PUB_FILE" ]; then
+    echo "Creating Azure SSH public key at $AZURE_KEY_PUB_FILE..."
+    cp "$SSH_PUB_KEY_FILE" "$AZURE_KEY_PUB_FILE"
+fi
+
+echo "Using SSH public key: $AZURE_KEY_PUB_FILE"
+
+################################################################################
 # Step 2: Define Azure instance parameters
 ################################################################################
 
@@ -147,24 +172,8 @@ VNET_PREFIX="10.0.0.0/8"
 #SUBNET_PREFIX="10.1.0.0/24"
 SUBNET_PREFIX="10.0.1.0/24"
 
-# Parse parameters, support --secondary-ip-count or --vm-per-instance
-MAX_SECONDARY_IPS=2
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --secondary-ip-count=*|--vm-per-instance=*)
-            MAX_SECONDARY_IPS="${1#*=}"
-            shift
-            ;;
-        --secondary-ip-count|--vm-per-instance)
-            shift
-            MAX_SECONDARY_IPS="$1"
-            shift
-            ;;
-        *)
-            break
-            ;;
-    esac
-done
+# Default MAX_SECONDARY_IPS if not set by command line args above
+MAX_SECONDARY_IPS=${MAX_SECONDARY_IPS:-2}
 
 
 echo "Checking if resource group '$RESOURCE_GROUP' exists..."
@@ -291,7 +300,7 @@ fi
 
 # Optional: Quick status check without blocking
 echo "Current Bastion status check..."
-CURRENT_STATE=$(az network.bastion show --resource-group "$RESOURCE_GROUP" --name "$BASTION_NAME" --query "provisioningState" -o tsv 2>/dev/null || echo "Not found or creating")
+CURRENT_STATE=$(az network bastion show --resource-group "$RESOURCE_GROUP" --name "$BASTION_NAME" --query "provisioningState" -o tsv 2>/dev/null || echo "Not found or creating")
 echo "Bastion ${BASTION_NAME} current state: $CURRENT_STATE"
 
 # Create NAT Gateway Public IP
@@ -399,6 +408,13 @@ if [ "$PROXY_ENABLED" = true ]; then
     done
 
     echo "Creating proxy VM ${PROXY_VM_NAME} with type ${PROXY_TYPE}..."
+    
+    # Verify SSH key exists before creating VM
+    if [ ! -f "$AZURE_KEY_PUB_FILE" ]; then
+        echo "ERROR: SSH public key not found at $AZURE_KEY_PUB_FILE"
+        exit 1
+    fi
+    
     az vm create \
       --resource-group "$RESOURCE_GROUP" \
       --name "$PROXY_VM_NAME" \
@@ -408,7 +424,7 @@ if [ "$PROXY_ENABLED" = true ]; then
       --size "$PROXY_TYPE" \
       --location "$LOCATION" \
       --admin-username azureuser \
-      --ssh-key-values azure-key.pub \
+      --ssh-key-values "$AZURE_KEY_PUB_FILE" \
       --os-disk-name "${PROXY_VM_NAME}-osdisk" \
       --os-disk-size-gb "$DISK_SIZE"
 
@@ -468,7 +484,7 @@ if [ "$PROXY_ENABLED" = true ]; then
       --vm-name "$PROXY_VM_NAME" \
       --name CustomScript \
       --publisher Microsoft.Azure.Extensions \
-      --settings "{\"commandToExecute\":\"cd /home/azureuser  ./instance_scripts/build_proxy.sh '${GITHUB_TOKEN}' '${INSTANCE_COUNT}' '${GITHUB_USERNAME}'\"}" \
+      --settings "{\"commandToExecute\":\"cd /home/azureuser && ./instance_scripts/build_proxy.sh '${GITHUB_TOKEN}' '${INSTANCE_COUNT}' '${GITHUB_USERNAME}'\"}" \
       --no-wait
 
     echo "Proxy VM ${PROXY_VM_NAME} created and configured successfully with build_proxy.sh execution initiated"
@@ -633,6 +649,13 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
     fi
 
     echo "CREATING VM ${VM_NAME} with dual NICs..."
+    
+    # Verify SSH key exists before creating VM
+    if [ ! -f "$AZURE_KEY_PUB_FILE" ]; then
+        echo "ERROR: SSH public key not found at $AZURE_KEY_PUB_FILE"
+        exit 1
+    fi
+    
     az vm create \
       --resource-group "$RESOURCE_GROUP" \
       --name "$VM_NAME" \
@@ -642,7 +665,7 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
       --size "$VM_SIZE" \
       --location "$LOCATION" \
       --admin-username azureuser \
-      --ssh-key-values azure-key.pub \
+      --ssh-key-values "$AZURE_KEY_PUB_FILE" \
       --os-disk-name "${VM_NAME}-osdisk" \
       --os-disk-size-gb "$DISK_SIZE"
 
