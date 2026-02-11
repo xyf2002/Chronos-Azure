@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Variables
-VAULT_NAME="chronos-expr"
+VAULT_NAME="chronos-expr-vault"
 SECRET_NAME="chronos-key"
 PEM_FILE_PATH="./azure-key"
 
@@ -43,7 +43,7 @@ az keyvault secret set \
 
 # Upload the private key as a secret
 az keyvault secret set \
-  --vault-name "chronos-expr" \
+  --vault-name "chronos-expr-vault" \
   --name "chronos-key" \
   --file "./azure-key" \
   --content-type "application/ssh-private-key"

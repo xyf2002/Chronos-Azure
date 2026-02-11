@@ -18,15 +18,14 @@ echo "Using GitHub user: ${GITHUB_USERNAME}"
 ################################################################################
 # Step 1.5: Setup SSH keys
 ################################################################################
-SSH_KEY_FILE="$HOME/.ssh/id_rsa"
-SSH_PUB_KEY_FILE="$HOME/.ssh/id_rsa.pub"
+SSH_KEY_FILE="./azure-key"
+SSH_PUB_KEY_FILE="./azure-key.pub"
 AZURE_KEY_FILE="./azure-key"
 AZURE_KEY_PUB_FILE="./azure-key.pub"
 
 # Check if local SSH keys exist, if not generate them
 if [ ! -f "$SSH_KEY_FILE" ]; then
     echo "Generating local SSH keys at $SSH_KEY_FILE..."
-    mkdir -p "$HOME/.ssh"
     ssh-keygen -t rsa -b 4096 -f "$SSH_KEY_FILE" -N "" -C "azure-vm-key"
     chmod 600 "$SSH_KEY_FILE"
     chmod 644 "$SSH_PUB_KEY_FILE"
@@ -47,7 +46,7 @@ echo "Using SSH public key: $AZURE_KEY_PUB_FILE"
 # Default values
 RESOURCE_GROUP="chronos-test"
 LOCATION="uksouth"
-VM_SIZE="Standard_D2s_v3"
+VM_SIZE="Standard_D8_v5"
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 #IMAGE="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/chronos-test/providers/Microsoft.Compute/galleries/chronosGallery/images/chronosBaseImage/versions/1.0.0"
 #IMAGE="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/chronos-template/providers/Microsoft.Compute/galleries/chronosGalleryTemplate/images/chronosBaseImage/versions/1.0.0"
@@ -440,7 +439,7 @@ if [ "$PROXY_ENABLED" = true ]; then
       --resource-group "$RESOURCE_GROUP" \
       --name "$PROXY_VM_NAME" \
       --command-id RunShellScript \
-      --scripts "mkdir -p /home/azureuser/.ssh; echo '$(cat ~/.ssh/id_rsa.pub)' > /home/azureuser/.ssh/authorized_keys; chown -R azureuser:azureuser /home/azureuser/.ssh; chmod 600 /home/azureuser/.ssh/authorized_keys; echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf; sudo sysctl -p; echo 'Proxy VM configured with IP ${PROXY_IP}'" \
+      --scripts "mkdir -p /home/azureuser/.ssh; echo '$(cat ./azure-key.pub)' > /home/azureuser/.ssh/authorized_keys; chown -R azureuser:azureuser /home/azureuser/.ssh; chmod 600 /home/azureuser/.ssh/authorized_keys; echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf; sudo sysctl -p; echo 'Proxy VM configured with IP ${PROXY_IP}'" \
       --output none
 
     # Wait for proxy VM to be ready
@@ -690,7 +689,7 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
       --resource-group "$RESOURCE_GROUP" \
       --name "$VM_NAME" \
       --command-id RunShellScript \
-      --scripts "mkdir -p /home/azureuser/.ssh; echo '$(cat ~/.ssh/id_rsa.pub)' > /home/azureuser/.ssh/authorized_keys; chown -R azureuser:azureuser /home/azureuser/.ssh; chmod 600 /home/azureuser/.ssh/authorized_keys; echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf; sudo sysctl -p; echo 'Dual NIC setup: eth0 (10.1.$i.x) and eth1 (10.3.$i.x)'" \
+      --scripts "mkdir -p /home/azureuser/.ssh; echo '$(cat ./azure-key.pub)' > /home/azureuser/.ssh/authorized_keys; chown -R azureuser:azureuser /home/azureuser/.ssh; chmod 600 /home/azureuser/.ssh/authorized_keys; echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf; sudo sysctl -p; echo 'Dual NIC setup: eth0 (10.1.$i.x) and eth1 (10.3.$i.x)'" \
       --output none
 
     # Wait for VM to be fully provisioned
