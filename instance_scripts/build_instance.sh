@@ -282,14 +282,14 @@ if [ -f "$AZURE_USER_HOME/.tsc_done" ] && [ ! -f "$AZURE_USER_HOME/.vm_setup_don
     sudo virsh net-destroy default
 
     step_log "Restarting libvirtd service to apply changes"
-    sudo service libvirtd restart
-
     sudo systemctl restart libvirtd
+    sleep 5
 
-    sudo virsh net-start  default
-    sleep 10
-    # 8. start VM
+    sudo virsh net-start default
+    sleep 5
 
+    # Clear any stale DHCP lease so the VM picks up the reserved IP on boot
+    sudo sed -i "/${REAL_MAC}/d" /var/lib/libvirt/dnsmasq/default.leases 2>/dev/null || true
 
     step_log "Starting ${VM_NAME} again"
     sudo virsh start "${VM_NAME}"
