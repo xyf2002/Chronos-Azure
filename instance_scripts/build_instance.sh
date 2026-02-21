@@ -281,15 +281,15 @@ if [ -f "$AZURE_USER_HOME/.tsc_done" ] && [ ! -f "$AZURE_USER_HOME/.vm_setup_don
     step_log "Restarting libvirt default network"
     sudo virsh net-destroy default
 
+    # Clear stale DHCP lease BEFORE restarting dnsmasq so it starts with a clean state
+    sudo sed -i "/${REAL_MAC}/d" /var/lib/libvirt/dnsmasq/default.leases 2>/dev/null || true
+
     step_log "Restarting libvirtd service to apply changes"
     sudo systemctl restart libvirtd
     sleep 5
 
-    sudo virsh net-start default
+    sudo virsh net-start default 2>/dev/null || true
     sleep 5
-
-    # Clear any stale DHCP lease so the VM picks up the reserved IP on boot
-    sudo sed -i "/${REAL_MAC}/d" /var/lib/libvirt/dnsmasq/default.leases 2>/dev/null || true
 
     step_log "Starting ${VM_NAME} again"
     sudo virsh start "${VM_NAME}"
