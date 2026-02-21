@@ -152,32 +152,31 @@ if [ -f "$AZURE_USER_HOME/.tsc_done" ] && [ ! -f "$AZURE_USER_HOME/.vm_setup_don
 
         sudo cp "$VM_XML" "$VM_XML.bak"
 
-        step_log "Deleting two lines after </features>"
+        step_log "Replacing cpu/clock blocks with host-passthrough versions"
         sudo awk '
+        BEGIN { in_cpu=0; in_clock=0 }
+        /<cpu[ >]/ { in_cpu=1; next }
+        in_cpu && /<\/cpu>/ { in_cpu=0; next }
+        in_cpu { next }
+        /<clock[ >]/ { in_clock=1; next }
+        in_clock && /<\/clock>/ { in_clock=0; next }
+        in_clock { next }
         /<\/features>/ {
-            print;
-            skip = 2;
-            next;
-        }
-        skip > 0 {
-            skip--;
-            next;
+            print
+            print "  <cpu mode=\"host-passthrough\" check=\"none\">"
+            print "    <feature policy=\"disable\" name=\"rdtscp\"/>"
+            print "    <feature policy=\"disable\" name=\"tsc-deadline\"/>"
+            print "  </cpu>"
+            print "  <clock offset=\"localtime\">"
+            print "    <timer name=\"rtc\" present=\"no\" tickpolicy=\"delay\"/>"
+            print "    <timer name=\"pit\" present=\"no\" tickpolicy=\"discard\"/>"
+            print "    <timer name=\"hpet\" present=\"no\"/>"
+            print "    <timer name=\"kvmclock\" present=\"yes\"/>"
+            print "  </clock>"
+            next
         }
         { print }
         ' "$VM_XML" > "$TMP_XML"
-
-        step_log "Inserting new <cpu> and <clock> blocks"
-        sudo sed -i "/<\/features>/a \
-    <cpu mode='host-passthrough' check='none'>\\
-      <feature policy='disable' name='rdtscp'/>\\
-      <feature policy='disable' name='tsc-deadline'/>\\
-    </cpu>\\
-    <clock offset='localtime'>\\
-      <timer name='rtc' present='no' tickpolicy='delay'/>\\
-      <timer name='pit' present='no' tickpolicy='discard'/>\\
-      <timer name='hpet' present='no'/>\\
-      <timer name='kvmclock' present='yes'/>\\
-    </clock>" "$TMP_XML"
 
         step_log "Replacing $VM_NAME.xml with modified version and redefining domain"
         sudo mv "$TMP_XML" "$VM_XML"
