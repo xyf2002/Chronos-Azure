@@ -78,6 +78,10 @@ sudo() {
         "virsh net-info default")
             return 0
             ;;
+        # fuser: return 1 so wait_for_lock exits immediately (no lock held)
+        "fuser "*)
+            return 1
+            ;;
         # grep -q on NET_XML: return 1 so the sed/dhcp-host block runs
         "grep -q "*)
             return 1
