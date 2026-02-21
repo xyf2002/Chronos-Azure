@@ -23,7 +23,8 @@ set -euo pipefail
 nodes=${1:-1}               # how many node blocks to emit
 outfile=${2:-nodes.json}    # destination file
 
-# open the root object
+# clear/create output file before writing
+> "$outfile"
 
 for node in $(seq 0  $((nodes - 1))); do
     right_net=$node
@@ -34,9 +35,7 @@ for node in $(seq 0  $((nodes - 1))); do
     base_host=${host%%[0-9]*}  # Removes everything from first digit onwards
 
     # open this node’s object
-    printf '%s%d: {' "$base_host" "$((node ))" >> "$outfile"
-  # open this node’s object
-  printf 'node%d: {' "$((node))" >> "$outfile"
+    printf ‘%s%d: {‘ "$base_host" "$((node))" >> "$outfile"
 
   for host in $(seq 6 254); do
     left_ip="10.1.${left_net}.${host}"

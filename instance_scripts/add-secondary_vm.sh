@@ -7,9 +7,9 @@ set -euo pipefail
 
 # 1. Discover the interface that owns *.2
 primary_if=$(ip -o -4 addr \
-               | awk '$4 ~ /\.6\/24$/ {print $2; exit}')
+               | awk ‘$4 ~ /\.7\/24$/ {print $2; exit}’)
 [[ -z $primary_if ]] && {
-  echo "Couldn’t find an interface with x.x.x.6/24" >&2
+  echo "Couldn’t find an interface with x.x.x.7/24" >&2
   exit 1
 }
 

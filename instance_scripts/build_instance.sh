@@ -17,7 +17,7 @@ NET_GW_IP="10.2.${INTERNAL_SUBNET}.1"
 RANGE_START="10.2.${INTERNAL_SUBNET}.2"
 RANGE_END="10.2.${INTERNAL_SUBNET}.254"
 EXPOSED_IP="10.1.${INSTANCE_ID}.1"
-VM_NAME="ins${INSTANCE_ID}"
+VM_NAME="ins${INSTANCE_ID}vm"
 
 echo "Instance_ID: ${INSTANCE_ID}, MACHINE_NUM: ${MACHINE_NUM}"
 echo "Internal Subnet: 10.2.${INTERNAL_SUBNET}.0/24, Internal IP: ${INTERNAL_IP}"
@@ -52,19 +52,16 @@ if [ -f "$AZURE_USER_HOME/.kernel_done" ] && [ -f "$AZURE_USER_HOME/.rebooted" ]
     step_log "Step 2: After reboot - Build and insert fake_tsc module" ""
     rm -f "$AZURE_USER_HOME/.rebooted"
     cd "$AZURE_USER_HOME"
-    # If build tools (gcc & make) not found, install them
-    if ! command -v gcc >/dev/null 2>&1 || ! command -v make >/dev/null 2>&1; then
-        step_log "Installing build-essential package" "Installing required build tools..."
-        wait_for_lock() {
-            while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-                echo "Waiting for dpkg lock to be released..."
-                sleep 5
-            done
-        }
-        wait_for_lock
-        sudo -S apt-get update -y
-        sudo -S apt-get install -y build-essential
-    fi
+    # Install build tools and kernel headers (always needed for module build)
+    wait_for_lock() {
+        while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+            echo "Waiting for dpkg lock to be released..."
+            sleep 5
+        done
+    }
+    wait_for_lock
+    sudo -S apt-get update -y
+    sudo -S apt-get install -y build-essential linux-headers-$(uname -r)
 
     if [ ! -d fake_tsc ]; then
         git clone "https://github.com/ujjwalpawar/fake_tsc.git"
