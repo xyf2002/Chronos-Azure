@@ -278,17 +278,21 @@ if [ -f "$AZURE_USER_HOME/.tsc_done" ] && [ ! -f "$AZURE_USER_HOME/.vm_setup_don
         sudo virsh destroy "${VM_NAME}"
         sleep 2
     fi
-    step_log "Restarting libvirt default network"
+    step_log "Restarting libvirt default network with fresh configuration"
     sudo virsh net-destroy default
 
-    # Clear stale DHCP lease BEFORE restarting dnsmasq so it starts with a clean state
-    sudo sed -i "/${REAL_MAC}/d" /var/lib/libvirt/dnsmasq/default.leases 2>/dev/null || true
+    # Undefine the network to wipe ALL stale lease state from libvirt's internal storage
+    # (libvirt uses --leasefile-ro + leaseshelper, so sed on a lease file has no effect)
+    sudo virsh net-undefine default
 
-    step_log "Restarting libvirtd service to apply changes"
-    sudo systemctl restart libvirtd
-    sleep 5
-
-    sudo virsh net-start default 2>/dev/null || true
+    # Redefine with a fresh XML containing only the current MAC reservation
+    NETWORK_XML="/tmp/libvirt-default-net.xml"
+    printf '<network>\n  <name>default</name>\n  <forward mode="nat"><nat><port start="1024" end="65535"/></nat></forward>\n  <bridge name="virbr0" stp="on" delay="0"/>\n  <ip address="%s" netmask="255.255.255.0">\n    <dhcp>\n      <range start="%s" end="%s"/>\n      <host mac="%s" name="%s" ip="%s"/>\n    </dhcp>\n  </ip>\n</network>\n' \
+        "${NET_GW_IP}" "${RANGE_START}" "${RANGE_END}" "${REAL_MAC}" "${VM_NAME}" "${INTERNAL_IP}" \
+        | sudo tee "${NETWORK_XML}" > /dev/null
+    sudo virsh net-define "${NETWORK_XML}"
+    sudo virsh net-autostart default
+    sudo virsh net-start default
     sleep 5
 
     step_log "Starting ${VM_NAME} again"
