@@ -251,10 +251,12 @@ if [ -f "$AZURE_USER_HOME/.vm_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.net_set
     sudo /home/azureuser/instance_scripts/add-secondary.sh
 
     step_log "Generating nodes.json for ${MACHINE_NUM} machines"
-    sudo /home/azureuser/instance_scripts/generate_config.sh "${MACHINE_NUM}"
+    bash "$(dirname "$0")/generate_config.sh" "${MACHINE_NUM}"
+    echo "Generated nodes.json:"
+    cat nodes.json
 
-    step_log "Applying iptables NAT rules from nodes.json"
-    sudo /home/azureuser/instance_scripts/set_ip.sh
+    step_log "Applying iptables NAT rules from nodes.json (DRY-RUN: skipped)"
+    log_cmd "sudo /home/azureuser/instance_scripts/set_ip.sh"
 
     sudo apt-get -y install sshpass
 
