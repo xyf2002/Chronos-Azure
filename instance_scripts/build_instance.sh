@@ -155,9 +155,11 @@ if [ -f "$AZURE_USER_HOME/.tsc_done" ] && [ ! -f "$AZURE_USER_HOME/.vm_setup_don
         step_log "Replacing cpu/clock blocks with host-passthrough versions"
         sudo awk '
         BEGIN { in_cpu=0; in_clock=0 }
+        /<cpu[^>]*\/>/ { next }
         /<cpu[ >]/ { in_cpu=1; next }
         in_cpu && /<\/cpu>/ { in_cpu=0; next }
         in_cpu { next }
+        /<clock[^>]*\/>/ { next }
         /<clock[ >]/ { in_clock=1; next }
         in_clock && /<\/clock>/ { in_clock=0; next }
         in_clock { next }
