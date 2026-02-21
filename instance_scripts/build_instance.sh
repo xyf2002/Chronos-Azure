@@ -384,6 +384,30 @@ if [ -f "$AZURE_USER_HOME/.net_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.k0s_in
         step_log "Installing sshpass" ""; sudo apt-get install -y sshpass
     fi
 
+    # Enable cgroup v2 in the VM (k0s v1.31+ requires cgroup v2; Ubuntu 20.04 defaults to v1)
+    step_log "Checking cgroup version in ${VM_NAME}"
+    if ! ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
+            ubuntu@${INTERNAL_IP} "grep -q 'unified_cgroup_hierarchy=1' /proc/cmdline" 2>/dev/null; then
+        step_log "cgroup v2 not active — modifying GRUB and rebooting ${VM_NAME}"
+        ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} \
+            'sudo sed -i "s/^GRUB_CMDLINE_LINUX=.*/GRUB_CMDLINE_LINUX=\"systemd.unified_cgroup_hierarchy=1\"/" /etc/default/grub && sudo update-grub'
+        ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} \
+            'sudo reboot' || true
+        sleep 15
+        step_log "Waiting for ${VM_NAME} to come back up after cgroup v2 reboot"
+        for i in {1..60}; do
+            if ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
+                    -oConnectTimeout=5 ubuntu@${INTERNAL_IP} "echo ok" 2>/dev/null; then
+                step_log "${VM_NAME} is back up"
+                break
+            fi
+            echo "Waiting for VM to reboot... ($i/60)"
+            sleep 5
+        done
+    else
+        step_log "cgroup v2 already active in ${VM_NAME} — no reboot needed"
+    fi
+
     if [ "${INSTANCE_ID}" -eq "0" ]; then
         step_log "Copying master k0s install script to VM" ""
         scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null $AZURE_USER_HOME/instance_scripts/master_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
