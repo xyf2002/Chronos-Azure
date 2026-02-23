@@ -8,6 +8,7 @@ echo "Assigning RBAC roles to Entra ID group for all created resources..."
 RESOURCE_GROUP="chronos-exp"
 GROUP_OBJECT_ID="FILL IN" # chronos-exp
 ROLE="Reader"
+SUB=$(az account show --query id -o tsv)
 
 # Assign Reader role to all VMs
 for vm in $(az vm list -g "$RESOURCE_GROUP" --query "[].id" -o tsv | tr -d '\r'); do
@@ -34,6 +35,20 @@ for vm in $(az vm list -g "$RESOURCE_GROUP" --query "[].name" -o tsv | tr -d '\r
     echo "Assigning Reader role to VNET: $vnet_id"
     az role assignment create --assignee "$GROUP_OBJECT_ID" --role "$ROLE" --scope "$vnet_id"
 done
+
+# Assign least-privileged login rights on all VMs in the RG
+for vm_id in $(az vm list -g "$RESOURCE_GROUP" --query "[].id" -o tsv | tr -d '\r'); do
+  az role assignment create \
+    --assignee "$GROUP_OBJECT_ID" \
+    --role "Virtual Machine User Login" \
+    --scope "$vm_id"
+done
+
+# Assign Reader role at resource group scope
+az role assignment create \
+  --assignee "$GROUP_OBJECT_ID" \
+  --role "Reader" \
+  --scope "/subscriptions/$SUB/resourceGroups/$RESOURCE_GROUP"
 
 echo "RBAC assignments completed."
 
