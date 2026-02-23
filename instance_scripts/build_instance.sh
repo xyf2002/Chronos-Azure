@@ -99,6 +99,28 @@ if [ ! -f "$AZURE_USER_HOME/.kernel_done" ]; then
     sudo sed -i 's/DEFAULT=0/DEFAULT="1>2"/g' /etc/default/grub.d/50-cloudimg-settings.cfg
     sudo update-grub
 
+    ################################################################################
+    # Step 1.5: Configure tuned for CPU isolation
+    ################################################################################
+    HOST_CPUS=$(nproc)
+    step_log "Installing tuned and configuring CPU isolation (cores 2-$((HOST_CPUS - 1)))"
+    sudo apt-get install -y tuned
+
+    sudo ln -sf /boot/grub/grub.cfg /etc/grub2.cfg
+    echo 'echo "export tuned_params"' | sudo tee -a /etc/grub.d/00_tuned
+
+    echo "isolated_cores=2-$((HOST_CPUS - 1))" | sudo tee /etc/tuned/realtime-variables.conf
+
+    sudo sed -i '/^cmdline_realtime=/d' /usr/lib/tuned/realtime/tuned.conf
+
+    if ! grep -q "^\[bootloader\]" /usr/lib/tuned/realtime/tuned.conf; then
+        echo -e "\n[bootloader]" | sudo tee -a /usr/lib/tuned/realtime/tuned.conf
+    fi
+
+    sudo sed -i '/^\[bootloader\]/a cmdline_realtime=+isolcpus=${managed_irq}${isolated_cores} nohz_full=${isolated_cores} rcu_nocbs=${isolated_cores} nosoftlockup' /usr/lib/tuned/realtime/tuned.conf
+
+    sudo tuned-adm profile realtime
+
     touch "$AZURE_USER_HOME/.kernel_done"
     step_log "Kernel build complete, rebooting to load new kernel..."
     sudo reboot
@@ -216,9 +238,13 @@ NETXML
     else
         step_log "Creating new VM ${VM_NAME}"
         # 4. Create VM
+        HOST_CPUS=$(nproc)
+        VM_CPUS=$(( HOST_CPUS > 2 ? HOST_CPUS - 2 : 1 ))
+        HOST_MEM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+        VM_MEM_MB=$(( HOST_MEM_MB > 4096 ? HOST_MEM_MB - 4096 : HOST_MEM_MB / 2 ))
         if ! sudo uvt-kvm create "${VM_NAME}" \
                 release=focal arch=amd64 \
-                --cpu 2 --memory 4096 --password 1997; then
+                --cpu "${VM_CPUS}" --memory "${VM_MEM_MB}" --password 1997; then
             echo "❌ uvt-kvm create failed, aborting"; exit 1
         fi
 
@@ -255,6 +281,31 @@ NETXML
         }
         { print }
         ' "$VM_XML" > "$TMP_XML"
+
+        step_log "Pinning CPUs"
+        NUM_CPU=$(nproc)
+        if [ "$NUM_CPU" -ge "4" ]; then
+            VCPU_SEQVAR=$((VM_CPUS - 1))
+            EMULATORPIN_CPUSET=$((NUM_CPU - 2))
+            IOTHREADPIN_CPUSET=$((NUM_CPU - 1))
+            CPU_PIN_BLOCK=$(
+                printf "  <iothreads>1</iothreads>\n"
+                printf "  <cputune>\n"
+                for i in $(seq 0 $VCPU_SEQVAR); do
+                    printf "    <vcpupin vcpu='%d' cpuset='%d'/>\n" "$i" "$((i+2))"
+                done
+                printf "    <emulatorpin cpuset='%d'/>\n" "$EMULATORPIN_CPUSET"
+                printf "    <iothreadpin iothread='1' cpuset='%d'/>\n" "$IOTHREADPIN_CPUSET"
+                printf "    <vcpusched vcpus='0' scheduler='fifo' priority='1'/>\n"
+                printf "    <vcpusched vcpus='1-%d' scheduler='fifo' priority='1'/>\n" "$VCPU_SEQVAR"
+                printf "    <emulatorsched scheduler='fifo' priority='1'/>\n"
+                printf "    <iothreadsched iothreads='1' scheduler='fifo' priority='1'/>\n"
+                printf "  </cputune>"
+            )
+            printf "%s" "$CPU_PIN_BLOCK" | sudo tee /tmp/cputune_block.xml > /dev/null
+            sudo sed -i "/<vcpu/r /tmp/cputune_block.xml" "$TMP_XML"
+            sudo rm -f /tmp/cputune_block.xml
+        fi
 
         step_log "Replacing $VM_NAME.xml with modified version and redefining domain"
         sudo mv "$TMP_XML" "$VM_XML"
@@ -509,5 +560,35 @@ if [ -f "$AZURE_USER_HOME/.net_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.k0s_in
     touch "$AZURE_USER_HOME/.k0s_in_vm_done"
 fi
 
-# Step 6: All done
-step_log "Step 6: Completed" "All steps already completed."
+################################################################################
+# Step 6: Clone quick_deployment_tools and set up kubectl aliases (controller only)
+################################################################################
+if [ -f "$AZURE_USER_HOME/.k0s_in_vm_done" ] && [ ! -f "$AZURE_USER_HOME/.auto_deploy_setup" ] && [ "$INSTANCE_ID" -eq "0" ]; then
+    step_log "Step 6: Cloning quick_deployment_tools and setting up aliases"
+    SSH_OPTS="-oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
+
+    step_log "Cloning quick_deployment_tools"
+    ssh $SSH_OPTS ubuntu@"${INTERNAL_IP}" "git clone --quiet https://github.com/netsys-edinburgh/quick_deployment_tools.git ~/quick_deployment_tools"
+
+    step_log "Installing parallel"
+    sudo apt install -y parallel
+
+    step_log "Appending aliases to .bashrc"
+    ssh $SSH_OPTS ubuntu@"${INTERNAL_IP}" 'cat << '"'"'EOF'"'"' >> $HOME/.bashrc
+s() {
+  helm install --values values.yaml $1 ./$1/
+}
+
+ns() {
+  helm uninstall $1
+}
+
+alias k="kubectl"
+alias l="kubectl logs"
+alias p="kubectl get pods"
+alias pw="kubectl get pods -o wide"
+EOF'
+    touch "$AZURE_USER_HOME/.auto_deploy_setup"
+fi
+
+step_log "All steps completed."

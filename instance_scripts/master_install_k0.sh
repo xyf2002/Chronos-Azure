@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 LOG_FILE="/home/ubuntu/k0s_master.log"
+if [ ! -f "/tmp/common_k0.sh" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  [ -f "${SCRIPT_DIR}/common_k0.sh" ] && cp "${SCRIPT_DIR}/common_k0.sh" /tmp/common_k0.sh
+fi
 source /tmp/common_k0.sh
 
 install_deps
 install_k0s
 
+# Update the hostname (used as node name in k8s)
+until sudo hostnamectl set-hostname "controller"
+do
+  echo "Failed to set hostname..."
+  sleep 5
+done
+
 log "Installing controller service"
 k0s config create > k0s.yaml
 sed -i 's/^    provider: kuberouter$/    provider: custom/' k0s.yaml
+sed -i 's/^  controllerManager: {}/  controllerManager:\n    extraArgs:\n      node-monitor-grace-period: 50000s/g' k0s.yaml
 log "configuring controller"
-sudo k0s install controller -c k0s.yaml --enable-worker
+sudo k0s install controller -c k0s.yaml --enable-worker --kubelet-extra-args="--max-pods=243"
 sleep 1
 log "starting k0s"
 sudo k0s start
@@ -39,6 +51,6 @@ chmod g-r ~/admin.conf
 sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq && sudo chmod +x /usr/bin/yq
 echo -e '#!/bin/bash\nexec k0s kubectl "$@"' | sudo tee /usr/local/bin/kubectl > /dev/null
 sudo chmod +x /usr/local/bin/kubectl
-kubectl taint nodes ins0vm node-role.kubernetes.io/control-plane-
+sudo k0s kubectl taint nodes ins0vm node-role.kubernetes.io/control-plane-
 #Generate and save Worker token
 log "Worker join-token written to /home/ubuntu/token-file"

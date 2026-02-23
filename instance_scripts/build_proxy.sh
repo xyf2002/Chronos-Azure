@@ -25,10 +25,8 @@ function step_log() {
     fi
     echo ""
 }
-GITHUB_TOKEN="$1"
-NUM_MACHINE="$2"
-GITHUB_USERNAME="$3"
-PROXY_ID="${4:-0}"          # proxy index (0, 1, 2, ...), default 0
+NUM_MACHINE="$1"
+PROXY_ID="${2:-0}"          # proxy index (0, 1, 2, ...), default 0
 
 PROXY_GATEWAY="10.3.$((PROXY_ID+1)).1"
 
@@ -38,8 +36,7 @@ kernel_repo="andrewferguson/phobos-proxy"
   sudo apt update
   sudo apt-get install -yqq libsctp-dev lksctp-tools  zlib1g-dev
   sudo modprobe sctp
-phobos_link="https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/${kernel_repo}.git"
-git clone --quiet "${phobos_link}" $AZURE_USER_HOME/phobos-proxy
+git clone --quiet "https://github.com/${kernel_repo}.git" $AZURE_USER_HOME/phobos-proxy
 cd $AZURE_USER_HOME/phobos-proxy
 
 # Add routes to all instance networks via this proxy's gateway
@@ -54,3 +51,18 @@ for (( i=0; i<NUM_MACHINE; i++ )); do
 done
 
 make -j
+
+# Update the hostname (used as node name in k8s)
+until sudo hostnamectl set-hostname "proxy-${PROXY_ID}"
+do
+  echo "Failed to set hostname..."
+  sleep 5
+done
+
+# Copy common_k0.sh to /tmp for worker_install_k0.sh to source
+cp $AZURE_USER_HOME/instance_scripts/common_k0.sh /tmp/common_k0.sh
+
+# Join the k8s cluster as a worker
+# 10.1.0.7 is the registered secondary IP on ins0's NIC, DNAT'd to the controller QEMU VM (10.2.0.7)
+step_log "Joining k8s cluster as worker (proxy-${PROXY_ID})"
+bash $AZURE_USER_HOME/instance_scripts/worker_install_k0.sh 10.1.0.7

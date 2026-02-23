@@ -1,19 +1,7 @@
 #!/bin/bash
 ################################################################################
-# Step 1: Extract GitHub credentials from file
+# Step 1: (GitHub credentials removed — repos are public)
 ################################################################################
-CRED_FILE="./git-credentials"
-if [ ! -f "$CRED_FILE" ]; then
-    echo "Git credentials file not found at: $CRED_FILE"
-    exit 1
-fi
-# Extract GitHub username and token (format: username:token)
-read GITHUB_USERNAME GITHUB_TOKEN < <(awk -F: '{print $1, $2}' "$CRED_FILE")
-if [ -z "$GITHUB_USERNAME" ] || [ -z "$GITHUB_TOKEN" ]; then
-    echo "GitHub credentials extraction failed."
-    exit 1
-fi
-echo "Using GitHub user: ${GITHUB_USERNAME}"
 
 ################################################################################
 # Step 1.5: Setup SSH keys
@@ -490,7 +478,7 @@ if [ "$PROXY_ENABLED" = true ]; then
           --vm-name "$PROXY_VM_NAME" \
           --name CustomScript \
           --publisher Microsoft.Azure.Extensions \
-          --settings "{\"commandToExecute\":\"cd /home/azureuser && ./instance_scripts/build_proxy.sh '${GITHUB_TOKEN}' '${INSTANCE_COUNT}' '${GITHUB_USERNAME}' '${proxy_idx}'\"}" \
+          --settings "{\"commandToExecute\":\"cd /home/azureuser && ./instance_scripts/build_proxy.sh '${INSTANCE_COUNT}' '${proxy_idx}'\"}" \
           --no-wait
 
         echo "Proxy VM ${PROXY_VM_NAME} (index ${proxy_idx}, IP ${PROXY_IP}) created and build_proxy.sh initiated"
@@ -499,6 +487,110 @@ if [ "$PROXY_ENABLED" = true ]; then
     wait
     echo "All ${PROXY_COUNT} proxy VM(s) created successfully"
 fi
+
+################################################################################
+# Step 2.8: Create Global-SC Subnet and Instance
+################################################################################
+(
+    GLOBALSC_SUBNET_NAME="globalsc-subnet"
+    GLOBALSC_SUBNET_PREFIX="10.4.1.0/24"
+    GLOBALSC_IP="10.4.1.5"
+    GLOBALSC_VM_NAME="globalsc-vm"
+    GLOBALSC_NIC_NAME="globalsc-nic"
+
+    echo "Creating Global-SC subnet ${GLOBALSC_SUBNET_NAME}..."
+    az network vnet subnet create \
+      --resource-group "$RESOURCE_GROUP" \
+      --vnet-name "$VNET_NAME" \
+      --name "$GLOBALSC_SUBNET_NAME" \
+      --address-prefix "$GLOBALSC_SUBNET_PREFIX" \
+      --nat-gateway "$NAT_GATEWAY_NAME"
+
+    for subnet_wait in {1..15}; do
+        if az network vnet subnet show --resource-group "$RESOURCE_GROUP" --vnet-name "$VNET_NAME" --name "$GLOBALSC_SUBNET_NAME" >/dev/null 2>&1; then
+            echo "Global-SC subnet ready."
+            break
+        else
+            echo "Waiting for Global-SC subnet... (${subnet_wait}/15)"
+            sleep 5
+        fi
+        if [ $subnet_wait -eq 15 ]; then
+            echo "ERROR: Global-SC subnet creation failed"
+            exit 1
+        fi
+    done
+
+    echo "Creating Global-SC NIC ${GLOBALSC_NIC_NAME} with IP ${GLOBALSC_IP}..."
+    az network nic create \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$GLOBALSC_NIC_NAME" \
+      --vnet-name "$VNET_NAME" \
+      --subnet "$GLOBALSC_SUBNET_NAME" \
+      --private-ip-address "$GLOBALSC_IP" \
+      --ip-forwarding true
+
+    echo "Creating Global-SC VM ${GLOBALSC_VM_NAME}..."
+    az vm create \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$GLOBALSC_VM_NAME" \
+      --nics "$GLOBALSC_NIC_NAME" \
+      --image "$IMAGE" \
+      --security-type Standard \
+      --size "${PROXY_TYPE:-$VM_SIZE}" \
+      --location "$LOCATION" \
+      --admin-username azureuser \
+      --ssh-key-values "$AZURE_KEY_PUB_FILE" \
+      --os-disk-name "${GLOBALSC_VM_NAME}-osdisk" \
+      --os-disk-size-gb "$DISK_SIZE"
+
+    az vm run-command invoke \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$GLOBALSC_VM_NAME" \
+      --command-id RunShellScript \
+      --scripts "mkdir -p /home/azureuser/.ssh; echo '$(cat ./azure-key.pub)' > /home/azureuser/.ssh/authorized_keys; chown -R azureuser:azureuser /home/azureuser/.ssh; chmod 600 /home/azureuser/.ssh/authorized_keys; echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf; sudo sysctl -p" \
+      --output none
+
+    echo "Waiting for Global-SC VM to be running..."
+    for attempt in {1..30}; do
+        VM_STATE=$(az vm get-instance-view \
+          --resource-group "$RESOURCE_GROUP" \
+          --name "$GLOBALSC_VM_NAME" \
+          --query "instanceView.statuses[?code=='PowerState/running']" \
+          --output tsv 2>/dev/null)
+        if [[ -n "$VM_STATE" ]]; then
+            echo "Global-SC VM is running at ${GLOBALSC_IP}"
+            break
+        fi
+        echo "Attempt ${attempt}/30: Global-SC VM not ready..."
+        if [ $attempt -eq 30 ]; then
+            echo "ERROR: Global-SC VM failed to start"
+            exit 1
+        fi
+        sleep 10
+    done
+
+    echo "Copying scripts to Global-SC VM..."
+    tar -czf /tmp/scripts_globalsc.tar.gz -C . instance_scripts/
+    scripts_b64=$(base64 < /tmp/scripts_globalsc.tar.gz)
+    az vm run-command invoke \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$GLOBALSC_VM_NAME" \
+      --command-id RunShellScript \
+      --scripts "echo '${scripts_b64}' | base64 -d > /tmp/scripts.tar.gz && cd /home/azureuser && tar -xzf /tmp/scripts.tar.gz && chown -R azureuser:azureuser instance_scripts/ && rm /tmp/scripts.tar.gz" \
+      --output none
+    rm -f /tmp/scripts_globalsc.tar.gz
+
+    echo "Executing build_globalsc.sh on ${GLOBALSC_VM_NAME}..."
+    az vm extension set \
+      --resource-group "$RESOURCE_GROUP" \
+      --vm-name "$GLOBALSC_VM_NAME" \
+      --name CustomScript \
+      --publisher Microsoft.Azure.Extensions \
+      --settings "{\"commandToExecute\":\"cd /home/azureuser && bash ./instance_scripts/build_globalsc.sh '${INSTANCE_COUNT}'\"}" \
+      --no-wait
+
+    echo "Global-SC VM created and build_globalsc.sh initiated (IP: ${GLOBALSC_IP})"
+) &
 
 ################################################################################
 # Step 3: Create Azure VMs and configure each VM remotely

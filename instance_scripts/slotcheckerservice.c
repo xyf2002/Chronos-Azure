@@ -324,7 +324,7 @@ int main(int argc, char *argv[]){
     // Filling server information
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(SERVER_PORT);
-    servaddr.sin_addr.s_addr = inet_addr("192.168.250.1");
+    servaddr.sin_addr.s_addr = inet_addr("10.4.1.5");  // Global-SC IP in Azure (10.4.1.0/24 subnet, .5 = first usable)
     int port = 4322;
     int from_switch_fd = bind_for_switch(port);
     int new_value = 1;
