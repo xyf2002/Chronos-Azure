@@ -2,7 +2,12 @@
 # Usage: sudo ./worker_install_k0s.sh <controller_ip>
 set -euo pipefail
 CTL_IP=${1:? "controller IP required"}
-LOG_FILE="${HOME}/k0s_worker.log"
+USER_HOME="${HOME:-}"
+if [ -z "$USER_HOME" ]; then
+  USER_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
+fi
+[ -n "$USER_HOME" ] || USER_HOME="/tmp"
+LOG_FILE="${USER_HOME}/k0s_worker.log"
 if [ ! -f "/tmp/common_k0.sh" ]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   [ -f "${SCRIPT_DIR}/common_k0.sh" ] && cp "${SCRIPT_DIR}/common_k0.sh" /tmp/common_k0.sh
@@ -18,7 +23,7 @@ if ! command -v sshpass >/dev/null 2>&1; then
 fi
 
 remote="ubuntu@${CTL_IP}:~/token-file"
-target="${HOME}/token-file"
+target="${USER_HOME}/token-file"
 delay=5
 max_attempts=10000
 attempt=1
@@ -50,5 +55,5 @@ LABEL_ARGS=""
 if [[ "$HOSTNAME" == "ins"* ]]; then
   LABEL_ARGS='--labels "dilated=true"'
 fi
-sudo k0s install worker --token-file "${HOME}/token-file" --kubelet-extra-args="--max-pods=243 --node-status-update-frequency=1s" $LABEL_ARGS >>"$LOG_FILE"
+sudo k0s install worker --token-file "${USER_HOME}/token-file" --kubelet-extra-args="--max-pods=243 --node-status-update-frequency=1s" $LABEL_ARGS >>"$LOG_FILE"
 sudo k0s start

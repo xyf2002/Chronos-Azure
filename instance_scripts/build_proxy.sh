@@ -34,7 +34,7 @@ echo "Proxy ID: ${PROXY_ID}, Gateway: ${PROXY_GATEWAY}"
 
 kernel_repo="andrewferguson/phobos-proxy"
   sudo apt update
-  sudo apt-get install -yqq libsctp-dev lksctp-tools  zlib1g-dev
+  sudo apt-get install -yqq build-essential libsctp-dev lksctp-tools zlib1g-dev
   sudo modprobe sctp
 git clone --quiet "https://github.com/${kernel_repo}.git" $AZURE_USER_HOME/phobos-proxy
 cd $AZURE_USER_HOME/phobos-proxy

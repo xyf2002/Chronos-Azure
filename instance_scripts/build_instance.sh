@@ -489,11 +489,22 @@ if [ -f "$AZURE_USER_HOME/.vm_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.net_set
     step_log "Installing ssh pass"
     sudo apt-get -y install sshpass
     password="1997"
-    SSH_OPTS="-oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
+    SSH_KEY_DIR="$AZURE_USER_HOME/.ssh"
+    SSH_PRIVATE_KEY="$SSH_KEY_DIR/id_rsa"
+    SSH_PUBLIC_KEY="$SSH_PRIVATE_KEY.pub"
+    SSH_OPTS="-i $SSH_PRIVATE_KEY -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
     step_log "create ssh keys"
-    ssh-keygen -q -t rsa -N '' -f $AZURE_USER_HOME/.ssh/id_rsa
+    mkdir -p "$SSH_KEY_DIR"
+    chmod 700 "$SSH_KEY_DIR"
+    if [ -f "$SSH_PRIVATE_KEY" ] && [ ! -f "$SSH_PUBLIC_KEY" ]; then
+        ssh-keygen -y -f "$SSH_PRIVATE_KEY" > "$SSH_PUBLIC_KEY"
+    elif [ ! -f "$SSH_PRIVATE_KEY" ] || [ ! -f "$SSH_PUBLIC_KEY" ]; then
+        ssh-keygen -q -t rsa -N '' -f "$SSH_PRIVATE_KEY"
+    fi
+    chmod 600 "$SSH_PRIVATE_KEY"
+    chmod 644 "$SSH_PUBLIC_KEY"
     step_log "Copying ssh keys"
-    sshpass -p $password ssh-copy-id $SSH_OPTS ubuntu@${INTERNAL_IP}
+    sshpass -p "$password" ssh-copy-id -i "$SSH_PUBLIC_KEY" $SSH_OPTS ubuntu@${INTERNAL_IP}
 
     step_log "Copying script to add ip address"
     scp $SSH_OPTS $AZURE_USER_HOME/instance_scripts/add-secondary_vm.sh ubuntu@${INTERNAL_IP}:~/
