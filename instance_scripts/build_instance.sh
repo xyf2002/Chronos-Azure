@@ -35,15 +35,77 @@ step_log() {
 
 # Step 0: Initialization
 step_log "Step 0: Initialization" "Starting integrated build_kernel process"
-touch "$AZURE_USER_HOME/.kernel_done" "$AZURE_USER_HOME/.rebooted"
 
-# Step 1: Kernel Build logic commented out
-step_log "Step 1: Kernel Build, already done"
-# : <<'END_KERNEL_BUILD'
-# ...existing kernel build commands...
-# END_KERNEL_BUILD
-touch "$AZURE_USER_HOME/.kernel_done"
-touch "$AZURE_USER_HOME/.rebooted"
+# Register a systemd service so this script re-runs automatically after each
+# reboot until all steps are complete (kernel build requires a reboot mid-run).
+SERVICE_FILE="/etc/systemd/system/build-instance.service"
+if [ ! -f "$SERVICE_FILE" ]; then
+    sudo tee "$SERVICE_FILE" > /dev/null << EOF
+[Unit]
+Description=Chronos instance build (reboot-persistent)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash ${AZURE_USER_HOME}/instance_scripts/build_instance.sh ${INSTANCE_ID} ${MACHINE_NUM}
+RemainAfterExit=yes
+StandardOutput=append:${AZURE_USER_HOME}/build.log
+StandardError=append:${AZURE_USER_HOME}/build.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable build-instance.service
+fi
+
+################################################################################
+# Step 1: Kernel Build
+################################################################################
+if [ ! -f "$AZURE_USER_HOME/.kernel_done" ]; then
+    step_log "Step 1: Building Chronos kernel"
+
+    wait_for_apt_lock() {
+        while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+            echo "Waiting for dpkg lock to be released..."
+            sleep 5
+        done
+    }
+    wait_for_apt_lock
+    sudo apt-get update -y
+    sudo apt-get install -y build-essential flex bison libssl-dev libelf-dev dwarves
+
+    KERNEL_DIR="$AZURE_USER_HOME/chronos-kernel"
+    if [ ! -d "$KERNEL_DIR" ]; then
+        step_log "Cloning chronos-kernel"
+        git clone --quiet "https://github.com/ujjwalpawar/chronos-kernel.git" "$KERNEL_DIR"
+    fi
+
+    cd "$KERNEL_DIR"
+    cp "/boot/config-$(uname -r)" .config
+    scripts/config --disable SYSTEM_TRUSTED_KEYS
+    scripts/config --disable SYSTEM_REVOCATION_KEYS
+    scripts/config --disable VIDEO_OV01A10
+    scripts/config --enable NETFILTER_XTABLES
+    scripts/config --enable NETFILTER_XT_MARK
+    scripts/config --enable NETFILTER_XT_TARGET_MARK
+    scripts/config --enable PREEMPT_RT_FULL
+    scripts/config --disable DEBUG_INFO_BTF
+    make olddefconfig
+    make "-j$(nproc)"
+    sudo make INSTALL_MOD_STRIP=1 modules_install
+    sudo make install
+    sudo sed -i 's/DEFAULT=0/DEFAULT="1>2"/g' /etc/default/grub.d/50-cloudimg-settings.cfg
+    sudo update-grub
+
+    touch "$AZURE_USER_HOME/.kernel_done"
+    step_log "Kernel build complete, rebooting to load new kernel..."
+    sudo reboot
+    exit 0
+else
+    step_log "Step 1: Kernel build already done, skipping"
+fi
 
 ################################################################################
 # Step 2: After Reboot, build & insert fake_tsc

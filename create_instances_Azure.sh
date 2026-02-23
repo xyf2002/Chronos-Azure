@@ -700,7 +700,7 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
       --resource-group "$RESOURCE_GROUP" \
       --name "$VM_NAME" \
       --command-id RunShellScript \
-      --scripts "mkdir -p /home/azureuser/.ssh; echo '$(cat ./azure-key.pub)' > /home/azureuser/.ssh/authorized_keys; chown -R azureuser:azureuser /home/azureuser/.ssh; chmod 600 /home/azureuser/.ssh/authorized_keys; echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf; sudo sysctl -p; echo 'Dual NIC setup: eth0 (10.1.$i.x) and eth1 (10.3.$i.x)'" \
+      --scripts "mkdir -p /home/azureuser/.ssh; echo '$(cat ./azure-key.pub)' > /home/azureuser/.ssh/authorized_keys; chown -R azureuser:azureuser /home/azureuser/.ssh; chmod 600 /home/azureuser/.ssh/authorized_keys; echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf; sudo sysctl -p; echo 'Dual NIC setup: eth0 (10.1.$i.x) and eth1 (10.5.$i.x)'" \
       --output none
 
     # Wait for VM to be fully provisioned
@@ -750,12 +750,13 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
 
     # Execute build_instance.sh using VM extension
     echo "Executing build_instance.sh on ${VM_NAME} using VM extension..."
-#    az vm extension set \
-#      --resource-group "$RESOURCE_GROUP" \
-#      --vm-name "$VM_NAME" \
-#      --name CustomScript \
-#      --publisher Microsoft.Azure.Extensions \
-#      --settings "{\"commandToExecute\": \"su - azureuser -c 'cd /home/azureuser && ./instance_scripts/build_instance.sh $INSTANCE_ID $INSTANCE_COUNT'\"}"
+    az vm extension set \
+      --resource-group "$RESOURCE_GROUP" \
+      --vm-name "$VM_NAME" \
+      --name CustomScript \
+      --publisher Microsoft.Azure.Extensions \
+      --settings "{\"commandToExecute\": \"cd /home/azureuser && bash ./instance_scripts/build_instance.sh ${INSTANCE_ID} ${INSTANCE_COUNT}\"}" \
+      --no-wait
 
   ) &
 
