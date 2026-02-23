@@ -184,9 +184,24 @@ if [ -f "$AZURE_USER_HOME/.tsc_done" ] && [ ! -f "$AZURE_USER_HOME/.vm_setup_don
 
 
     if ! sudo virsh net-info default >/dev/null 2>&1; then
-        sudo virsh net-define /usr/share/libvirt/networks/default.xml
+        DEFAULT_NET_XML="/usr/share/libvirt/networks/default.xml"
+        if [ ! -f "$DEFAULT_NET_XML" ]; then
+            sudo mkdir -p "$(dirname $DEFAULT_NET_XML)"
+            sudo tee "$DEFAULT_NET_XML" > /dev/null <<'NETXML'
+<network>
+  <name>default</name>
+  <forward mode="nat"><nat><port start="1024" end="65535"/></nat></forward>
+  <bridge name="virbr0" stp="on" delay="0"/>
+  <ip address="192.168.122.1" netmask="255.255.255.0">
+    <dhcp><range start="192.168.122.2" end="192.168.122.254"/></dhcp>
+  </ip>
+</network>
+NETXML
+        fi
+        sudo virsh net-define "$DEFAULT_NET_XML"
     fi
-    sudo virsh net-start default || echo "Network already started"
+    sudo virsh net-autostart default
+    sudo virsh net-start default 2>/dev/null || echo "Network already started"
 
 
     #step_log "Changing default storage location"
