@@ -489,37 +489,37 @@ if [ "$PROXY_ENABLED" = true ]; then
 fi
 
 ################################################################################
-# Step 2.8: Create Global-SC Subnet and Instance
+# Step 2.8: Create Global-SC Subnet (sequential) and Instance (background)
 ################################################################################
+GLOBALSC_SUBNET_NAME="globalsc-subnet"
+GLOBALSC_SUBNET_PREFIX="10.4.1.0/24"
+GLOBALSC_IP="10.4.1.5"
+GLOBALSC_VM_NAME="globalsc-vm"
+GLOBALSC_NIC_NAME="globalsc-nic"
+
+echo "Creating Global-SC subnet ${GLOBALSC_SUBNET_NAME}..."
+az network vnet subnet create \
+  --resource-group "$RESOURCE_GROUP" \
+  --vnet-name "$VNET_NAME" \
+  --name "$GLOBALSC_SUBNET_NAME" \
+  --address-prefix "$GLOBALSC_SUBNET_PREFIX" \
+  --nat-gateway "$NAT_GATEWAY_NAME"
+
+for subnet_wait in {1..15}; do
+    if az network vnet subnet show --resource-group "$RESOURCE_GROUP" --vnet-name "$VNET_NAME" --name "$GLOBALSC_SUBNET_NAME" >/dev/null 2>&1; then
+        echo "Global-SC subnet ready."
+        break
+    else
+        echo "Waiting for Global-SC subnet... (${subnet_wait}/15)"
+        sleep 5
+    fi
+    if [ $subnet_wait -eq 15 ]; then
+        echo "ERROR: Global-SC subnet creation failed"
+        exit 1
+    fi
+done
+
 (
-    GLOBALSC_SUBNET_NAME="globalsc-subnet"
-    GLOBALSC_SUBNET_PREFIX="10.4.1.0/24"
-    GLOBALSC_IP="10.4.1.5"
-    GLOBALSC_VM_NAME="globalsc-vm"
-    GLOBALSC_NIC_NAME="globalsc-nic"
-
-    echo "Creating Global-SC subnet ${GLOBALSC_SUBNET_NAME}..."
-    az network vnet subnet create \
-      --resource-group "$RESOURCE_GROUP" \
-      --vnet-name "$VNET_NAME" \
-      --name "$GLOBALSC_SUBNET_NAME" \
-      --address-prefix "$GLOBALSC_SUBNET_PREFIX" \
-      --nat-gateway "$NAT_GATEWAY_NAME"
-
-    for subnet_wait in {1..15}; do
-        if az network vnet subnet show --resource-group "$RESOURCE_GROUP" --vnet-name "$VNET_NAME" --name "$GLOBALSC_SUBNET_NAME" >/dev/null 2>&1; then
-            echo "Global-SC subnet ready."
-            break
-        else
-            echo "Waiting for Global-SC subnet... (${subnet_wait}/15)"
-            sleep 5
-        fi
-        if [ $subnet_wait -eq 15 ]; then
-            echo "ERROR: Global-SC subnet creation failed"
-            exit 1
-        fi
-    done
-
     echo "Creating Global-SC NIC ${GLOBALSC_NIC_NAME} with IP ${GLOBALSC_IP}..."
     az network nic create \
       --resource-group "$RESOURCE_GROUP" \
