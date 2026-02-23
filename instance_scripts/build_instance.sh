@@ -74,7 +74,7 @@ if [ ! -f "$AZURE_USER_HOME/.kernel_done" ]; then
     }
     wait_for_apt_lock
     sudo apt-get update -y
-    sudo apt-get install -y build-essential flex bison libssl-dev libelf-dev dwarves
+    sudo apt-get install -y build-essential flex bison libssl-dev libelf-dev dwarves zstd
 
     KERNEL_DIR="$AZURE_USER_HOME/chronos-kernel"
     if [ ! -d "$KERNEL_DIR" ]; then
@@ -110,9 +110,8 @@ fi
 ################################################################################
 # Step 2: After Reboot, build & insert fake_tsc
 ################################################################################
-if [ -f "$AZURE_USER_HOME/.kernel_done" ] && [ -f "$AZURE_USER_HOME/.rebooted" ] && [ ! -f "$AZURE_USER_HOME/.tsc_done" ]; then
+if [ -f "$AZURE_USER_HOME/.kernel_done" ] && [ ! -f "$AZURE_USER_HOME/.tsc_done" ]; then
     step_log "Step 2: After reboot - Build and insert fake_tsc module" ""
-    rm -f "$AZURE_USER_HOME/.rebooted"
     cd "$AZURE_USER_HOME"
     # Install build tools and kernel headers (always needed for module build)
     wait_for_lock() {
