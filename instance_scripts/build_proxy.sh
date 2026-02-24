@@ -27,6 +27,7 @@ function step_log() {
 }
 NUM_MACHINE="$1"
 PROXY_ID="${2:-0}"          # proxy index (0, 1, 2, ...), default 0
+PROXY_NODE_ID="$PROXY_ID"
 
 PROXY_GATEWAY="10.3.$((PROXY_ID+1)).1"
 
@@ -48,6 +49,33 @@ for (( i=0; i<NUM_MACHINE; i++ )); do
   # Route to second NIC subnet (10.5.i.0/24)
   echo "Adding route: 10.5.${i}.0/24 via ${PROXY_GATEWAY}"
   sudo ip route add 10.5."${i}".0/24 via ${PROXY_GATEWAY} dev eth0 || echo "Route to 10.5.${i}.0/24 may already exist"
+done
+
+# Add all proxy subnet IPs on the primary 10.3.* interface
+step_log "Adding proxy subnet IP aliases"
+primary_if=$(ip -o -4 addr | awk '$4 ~ /^10\.3\./ {print $2; exit}')
+if [ -z "$primary_if" ]; then
+  echo "ERROR: Could not find interface with 10.3.* address"
+  exit 1
+fi
+for i in $(seq 1 254); do
+  sudo ip addr add "10.3.$((PROXY_NODE_ID + 1)).${i}/24" dev "$primary_if" 2>/dev/null || true
+done
+
+# Enable forwarding and add DNAT/SNAT rules so proxy can reach all inner VMs
+step_log "Configuring DNAT/SNAT rules for inner VMs"
+sudo sysctl -w net.ipv4.ip_forward=1
+for (( i=0; i<NUM_MACHINE; i++ )); do
+  INNER_IP="10.2.${i}.7"
+  OUTER_IP="10.1.${i}.7"
+  echo "Adding NAT rules: ${INNER_IP} -> ${OUTER_IP}"
+
+  sudo iptables -t nat -C OUTPUT -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}" 2>/dev/null || \
+    sudo iptables -t nat -I OUTPUT 1 -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}"
+  sudo iptables -t nat -C PREROUTING -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}" 2>/dev/null || \
+    sudo iptables -t nat -I PREROUTING 1 -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}"
+  sudo iptables -t nat -C POSTROUTING -d "${OUTER_IP}/32" -j MASQUERADE 2>/dev/null || \
+    sudo iptables -t nat -I POSTROUTING 1 -d "${OUTER_IP}/32" -j MASQUERADE
 done
 
 make -j

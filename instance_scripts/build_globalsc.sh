@@ -29,6 +29,22 @@ for (( i=0; i<NUM_OUTER_NODES; i++ )); do
     sudo ip route add 10.2."${i}".0/24 via 10.1."${i}".5 || echo "Route to 10.2.${i}.0/24 may already exist"
 done
 
+# Enable forwarding and add DNAT/SNAT rules so globalsc can reach all inner VMs
+step_log "Configuring DNAT/SNAT rules for inner VMs"
+sudo sysctl -w net.ipv4.ip_forward=1
+for (( i=0; i<NUM_OUTER_NODES; i++ )); do
+    INNER_IP="10.2.${i}.7"
+    OUTER_IP="10.1.${i}.7"
+    echo "Adding NAT rules: ${INNER_IP} -> ${OUTER_IP}"
+
+    sudo iptables -t nat -C OUTPUT -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}" 2>/dev/null || \
+        sudo iptables -t nat -I OUTPUT 1 -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}"
+    sudo iptables -t nat -C PREROUTING -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}" 2>/dev/null || \
+        sudo iptables -t nat -I PREROUTING 1 -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}"
+    sudo iptables -t nat -C POSTROUTING -d "${OUTER_IP}/32" -j MASQUERADE 2>/dev/null || \
+        sudo iptables -t nat -I POSTROUTING 1 -d "${OUTER_IP}/32" -j MASQUERADE
+done
+
 # Setup ssh keys
 ssh-keygen -q -t rsa -N '' -f $AZURE_USER_HOME/.ssh/id_rsa 2>/dev/null || true
 grep -qF "$(cat $AZURE_USER_HOME/.ssh/id_rsa.pub)" $AZURE_USER_HOME/.ssh/authorized_keys 2>/dev/null || \
