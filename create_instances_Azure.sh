@@ -11,22 +11,6 @@ SSH_PUB_KEY_FILE="./azure-key.pub"
 AZURE_KEY_FILE="./azure-key"
 AZURE_KEY_PUB_FILE="./azure-key.pub"
 
-# Check if local SSH keys exist, if not generate them
-if [ ! -f "$SSH_KEY_FILE" ]; then
-    echo "Generating local SSH keys at $SSH_KEY_FILE..."
-    ssh-keygen -t rsa -b 4096 -f "$SSH_KEY_FILE" -N "" -C "azure-vm-key"
-    chmod 600 "$SSH_KEY_FILE"
-    chmod 644 "$SSH_PUB_KEY_FILE"
-fi
-
-# Create a copy of the public key for Azure use if it doesn't exist
-if [ ! -f "$AZURE_KEY_PUB_FILE" ]; then
-    echo "Creating Azure SSH public key at $AZURE_KEY_PUB_FILE..."
-    cp "$SSH_PUB_KEY_FILE" "$AZURE_KEY_PUB_FILE"
-fi
-
-echo "Using SSH public key: $AZURE_KEY_PUB_FILE"
-
 ################################################################################
 # Step 2: Define Azure instance parameters
 ################################################################################
@@ -68,7 +52,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --vm-name-prefix <prefix>        Prefix for VM names (default: ins)"
             echo "  --proxy-type <type>             VM size for proxy machine (enables proxy creation)"
             echo "  --proxy-count <n>               Number of proxy VMs to create (default: 1, requires --proxy-type)"
-            echo "  --disk-size <size>              OS disk size in GB (default: 30)"
+            echo "  --disk-size <size>              OS disk size in GB (default: 30)
+  --ssh-key <path>               Path to existing private key (default: ./azure-key); generates if absent"
             echo ""
             echo "Example:"
             echo "  ./create_instances_Azure.sh --resource-group chronos-test --location uksouth --vm-size Standard_D2s_v3 --instance-count 2 --secondary-ip-count 2 --proxy-type Standard_D2s_v3 --proxy-count 2 --disk-size 50"
@@ -156,11 +141,37 @@ while [[ $# -gt 0 ]]; do
             DISK_SIZE="${1#*=}"
             shift
             ;;
+        --ssh-key)
+            SSH_KEY_FILE="$2"
+            SSH_PUB_KEY_FILE="$2.pub"
+            AZURE_KEY_FILE="$2"
+            AZURE_KEY_PUB_FILE="$2.pub"
+            shift 2
+            ;;
+        --ssh-key=*)
+            _v="${1#*=}"
+            SSH_KEY_FILE="$_v"
+            SSH_PUB_KEY_FILE="$_v.pub"
+            AZURE_KEY_FILE="$_v"
+            AZURE_KEY_PUB_FILE="$_v.pub"
+            shift
+            ;;
         *)
             break
             ;;
     esac
 done
+
+# Generate key pair only if the private key file does not already exist
+if [ ! -f "$SSH_KEY_FILE" ]; then
+    echo "Generating SSH key pair at $SSH_KEY_FILE..."
+    ssh-keygen -t rsa -b 4096 -f "$SSH_KEY_FILE" -N "" -C "azure-vm-key"
+    chmod 600 "$SSH_KEY_FILE"
+    chmod 644 "$SSH_PUB_KEY_FILE"
+else
+    echo "Using existing SSH key: $SSH_KEY_FILE"
+fi
+echo "Using SSH public key: $AZURE_KEY_PUB_FILE"
 
 VNET_NAME="myVnet"
 SUBNET_NAME="main-subnet"
@@ -497,27 +508,21 @@ GLOBALSC_IP="10.4.1.5"
 GLOBALSC_VM_NAME="globalsc-vm"
 GLOBALSC_NIC_NAME="globalsc-nic"
 
-echo "Creating Global-SC subnet ${GLOBALSC_SUBNET_NAME}..."
-az network vnet subnet create \
-  --resource-group "$RESOURCE_GROUP" \
-  --vnet-name "$VNET_NAME" \
-  --name "$GLOBALSC_SUBNET_NAME" \
-  --address-prefix "$GLOBALSC_SUBNET_PREFIX" \
-  --nat-gateway "$NAT_GATEWAY_NAME"
-
-for subnet_wait in {1..15}; do
-    if az network vnet subnet show --resource-group "$RESOURCE_GROUP" --vnet-name "$VNET_NAME" --name "$GLOBALSC_SUBNET_NAME" >/dev/null 2>&1; then
-        echo "Global-SC subnet ready."
-        break
-    else
-        echo "Waiting for Global-SC subnet... (${subnet_wait}/15)"
-        sleep 5
-    fi
-    if [ $subnet_wait -eq 15 ]; then
+if az network vnet subnet show --resource-group "$RESOURCE_GROUP" --vnet-name "$VNET_NAME" --name "$GLOBALSC_SUBNET_NAME" >/dev/null 2>&1; then
+    echo "Global-SC subnet ${GLOBALSC_SUBNET_NAME} already exists, skipping."
+else
+    echo "Creating Global-SC subnet ${GLOBALSC_SUBNET_NAME}..."
+    if ! az network vnet subnet create \
+      --resource-group "$RESOURCE_GROUP" \
+      --vnet-name "$VNET_NAME" \
+      --name "$GLOBALSC_SUBNET_NAME" \
+      --address-prefix "$GLOBALSC_SUBNET_PREFIX" \
+      --nat-gateway "$NAT_GATEWAY_NAME"; then
         echo "ERROR: Global-SC subnet creation failed"
         exit 1
     fi
-done
+    echo "Global-SC subnet ready."
+fi
 
 (
     echo "Creating Global-SC NIC ${GLOBALSC_NIC_NAME} with IP ${GLOBALSC_IP}..."
