@@ -496,6 +496,8 @@ if [ -f "$AZURE_USER_HOME/.vm_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.net_set
     step_log "create ssh keys"
     mkdir -p "$SSH_KEY_DIR"
     chmod 700 "$SSH_KEY_DIR"
+    # Fix ownership if keys were previously created as root
+    sudo chown "$(id -un):$(id -gn)" "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY" 2>/dev/null || true
     if [ -f "$SSH_PRIVATE_KEY" ] && [ ! -f "$SSH_PUBLIC_KEY" ]; then
         ssh-keygen -y -f "$SSH_PRIVATE_KEY" > "$SSH_PUBLIC_KEY"
     elif [ ! -f "$SSH_PRIVATE_KEY" ] || [ ! -f "$SSH_PUBLIC_KEY" ]; then
