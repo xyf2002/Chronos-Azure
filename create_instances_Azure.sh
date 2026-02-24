@@ -525,28 +525,36 @@ else
 fi
 
 (
-    echo "Creating Global-SC NIC ${GLOBALSC_NIC_NAME} with IP ${GLOBALSC_IP}..."
-    az network nic create \
-      --resource-group "$RESOURCE_GROUP" \
-      --name "$GLOBALSC_NIC_NAME" \
-      --vnet-name "$VNET_NAME" \
-      --subnet "$GLOBALSC_SUBNET_NAME" \
-      --private-ip-address "$GLOBALSC_IP" \
-      --ip-forwarding true
+    if az network nic show --resource-group "$RESOURCE_GROUP" --name "$GLOBALSC_NIC_NAME" >/dev/null 2>&1; then
+        echo "Global-SC NIC ${GLOBALSC_NIC_NAME} already exists, skipping."
+    else
+        echo "Creating Global-SC NIC ${GLOBALSC_NIC_NAME} with IP ${GLOBALSC_IP}..."
+        az network nic create \
+          --resource-group "$RESOURCE_GROUP" \
+          --name "$GLOBALSC_NIC_NAME" \
+          --vnet-name "$VNET_NAME" \
+          --subnet "$GLOBALSC_SUBNET_NAME" \
+          --private-ip-address "$GLOBALSC_IP" \
+          --ip-forwarding true
+    fi
 
-    echo "Creating Global-SC VM ${GLOBALSC_VM_NAME}..."
-    az vm create \
-      --resource-group "$RESOURCE_GROUP" \
-      --name "$GLOBALSC_VM_NAME" \
-      --nics "$GLOBALSC_NIC_NAME" \
-      --image "$IMAGE" \
-      --security-type Standard \
-      --size "${PROXY_TYPE:-$VM_SIZE}" \
-      --location "$LOCATION" \
-      --admin-username azureuser \
-      --ssh-key-values "$AZURE_KEY_PUB_FILE" \
-      --os-disk-name "${GLOBALSC_VM_NAME}-osdisk" \
-      --os-disk-size-gb "$DISK_SIZE"
+    if az vm show --resource-group "$RESOURCE_GROUP" --name "$GLOBALSC_VM_NAME" >/dev/null 2>&1; then
+        echo "Global-SC VM ${GLOBALSC_VM_NAME} already exists, skipping creation."
+    else
+        echo "Creating Global-SC VM ${GLOBALSC_VM_NAME}..."
+        az vm create \
+          --resource-group "$RESOURCE_GROUP" \
+          --name "$GLOBALSC_VM_NAME" \
+          --nics "$GLOBALSC_NIC_NAME" \
+          --image "$IMAGE" \
+          --security-type Standard \
+          --size "${PROXY_TYPE:-$VM_SIZE}" \
+          --location "$LOCATION" \
+          --admin-username azureuser \
+          --ssh-key-values "$AZURE_KEY_PUB_FILE" \
+          --os-disk-name "${GLOBALSC_VM_NAME}-osdisk" \
+          --os-disk-size-gb "$DISK_SIZE"
+    fi
 
     az vm run-command invoke \
       --resource-group "$RESOURCE_GROUP" \
