@@ -66,16 +66,18 @@ done
 step_log "Configuring DNAT/SNAT rules for inner VMs"
 sudo sysctl -w net.ipv4.ip_forward=1
 for (( i=0; i<NUM_MACHINE; i++ )); do
-  INNER_IP="10.2.${i}.7"
-  OUTER_IP="10.1.${i}.7"
-  echo "Adding NAT rules: ${INNER_IP} -> ${OUTER_IP}"
+  for host in $(seq 7 254); do
+    INNER_IP="10.2.${i}.${host}"
+    OUTER_IP="10.1.${i}.${host}"
+    echo "Adding NAT rules: ${INNER_IP} -> ${OUTER_IP}"
 
-  sudo iptables -t nat -C OUTPUT -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}" 2>/dev/null || \
-    sudo iptables -t nat -I OUTPUT 1 -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}"
-  sudo iptables -t nat -C PREROUTING -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}" 2>/dev/null || \
-    sudo iptables -t nat -I PREROUTING 1 -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}"
-  sudo iptables -t nat -C POSTROUTING -d "${OUTER_IP}/32" -j MASQUERADE 2>/dev/null || \
-    sudo iptables -t nat -I POSTROUTING 1 -d "${OUTER_IP}/32" -j MASQUERADE
+    sudo iptables -t nat -C OUTPUT -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}" 2>/dev/null || \
+      sudo iptables -t nat -I OUTPUT 1 -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}"
+    sudo iptables -t nat -C PREROUTING -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}" 2>/dev/null || \
+      sudo iptables -t nat -I PREROUTING 1 -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}"
+    sudo iptables -t nat -C POSTROUTING -d "${OUTER_IP}/32" -j MASQUERADE 2>/dev/null || \
+      sudo iptables -t nat -I POSTROUTING 1 -d "${OUTER_IP}/32" -j MASQUERADE
+  done
 done
 
 make -j
