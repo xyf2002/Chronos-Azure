@@ -506,7 +506,8 @@ if [ -f "$AZURE_USER_HOME/.vm_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.net_set
     chmod 600 "$SSH_PRIVATE_KEY"
     chmod 644 "$SSH_PUBLIC_KEY"
     step_log "Copying ssh keys"
-    sshpass -p "$password" ssh-copy-id -i "$SSH_PUBLIC_KEY" $SSH_OPTS ubuntu@${INTERNAL_IP}
+    sshpass -p "$password" ssh-copy-id -i "$SSH_PUBLIC_KEY" \
+        -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP}
 
     step_log "Copying script to add ip address"
     scp $SSH_OPTS $AZURE_USER_HOME/instance_scripts/add-secondary_vm.sh ubuntu@${INTERNAL_IP}:~/
