@@ -486,8 +486,13 @@ if [ -f "$AZURE_USER_HOME/.vm_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.net_set
     step_log "Adding IP TABLES"
     sudo $AZURE_USER_HOME/instance_scripts/set_ip.sh
     sleep 5
-    step_log "Installing ssh pass"
-    sudo apt-get -y install sshpass
+    if ! command -v sshpass >/dev/null 2>&1; then
+        step_log "Installing sshpass"
+        while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+            echo "Waiting for dpkg lock..."; sleep 5
+        done
+        sudo apt-get -y install sshpass
+    fi
     password="1997"
     SSH_KEY_DIR="$AZURE_USER_HOME/.ssh"
     SSH_PRIVATE_KEY="$SSH_KEY_DIR/id_rsa"
@@ -506,13 +511,46 @@ if [ -f "$AZURE_USER_HOME/.vm_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.net_set
     chmod 600 "$SSH_PRIVATE_KEY"
     chmod 644 "$SSH_PUBLIC_KEY"
     step_log "Copying ssh keys"
-    HOME="$AZURE_USER_HOME" sshpass -p "$password" ssh-copy-id -i "$SSH_PUBLIC_KEY" \
-        -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP}
+    KEY_COPIED=false
+    SSH_PREFIX=""
+
+    if sshpass -p "$password" ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
+            ubuntu@${INTERNAL_IP} \
+            "mkdir -p /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && cat >> /home/ubuntu/.ssh/authorized_keys && chmod 600 /home/ubuntu/.ssh/authorized_keys" \
+            < "$SSH_PUBLIC_KEY"; then
+        KEY_COPIED=true
+    else
+        step_log "stdin pipe failed, falling back to scp method"
+        if { sshpass -p "$password" scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
+                 "$SSH_PUBLIC_KEY" ubuntu@${INTERNAL_IP}:/tmp/id_rsa_tmp.pub && \
+             sshpass -p "$password" ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
+                 ubuntu@${INTERNAL_IP} \
+                 "mkdir -p /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && cat /tmp/id_rsa_tmp.pub >> /home/ubuntu/.ssh/authorized_keys && chmod 600 /home/ubuntu/.ssh/authorized_keys && rm -f /tmp/id_rsa_tmp.pub"; }; then
+            KEY_COPIED=true
+        else
+            step_log "scp method failed, falling back to ssh-copy-id with temp HOME"
+            mkdir -p /tmp/sshcopyid_home/.ssh
+            chmod 700 /tmp/sshcopyid_home/.ssh
+            if HOME=/tmp/sshcopyid_home sshpass -p "$password" ssh-copy-id \
+                    -i "$SSH_PUBLIC_KEY" \
+                    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                    ubuntu@${INTERNAL_IP}; then
+                KEY_COPIED=true
+            fi
+            rm -rf /tmp/sshcopyid_home
+        fi
+    fi
+
+    if ! $KEY_COPIED; then
+        step_log "All key copy methods failed — subsequent commands will use password auth"
+        SSH_PREFIX="sshpass -p $password"
+        SSH_OPTS="-oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
+    fi
 
     step_log "Copying script to add ip address"
-    scp $SSH_OPTS $AZURE_USER_HOME/instance_scripts/add-secondary_vm.sh ubuntu@${INTERNAL_IP}:~/
+    $SSH_PREFIX scp $SSH_OPTS $AZURE_USER_HOME/instance_scripts/add-secondary_vm.sh ubuntu@${INTERNAL_IP}:/home/ubuntu/
     step_log "calling copied script"
-    ssh $SSH_OPTS ubuntu@${INTERNAL_IP}  "sudo /home/ubuntu/add-secondary_vm.sh"
+    $SSH_PREFIX ssh $SSH_OPTS ubuntu@${INTERNAL_IP} "sudo /home/ubuntu/add-secondary_vm.sh"
     touch $AZURE_USER_HOME/.net_setup_done
 fi
 
@@ -525,17 +563,39 @@ if [ -f "$AZURE_USER_HOME/.net_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.k0s_in
         step_log "Installing sshpass" ""; sudo apt-get install -y sshpass
     fi
 
-    # Enable cgroup v2 in the VM (k0s v1.31+ requires cgroup v2; Ubuntu 20.04 defaults to v1)
-    step_log "Checking cgroup version in ${VM_NAME}"
+    # Upgrade HWE kernel (5.15, required by Cilium) and enable cgroup v2 in one reboot.
+    NEEDS_REBOOT=false
+
+    # Check kernel version in inner VM
+    INNER_KERNEL=$(ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
+        ubuntu@${INTERNAL_IP} "uname -r" 2>/dev/null || echo "0.0.0")
+    INNER_MINOR=$(echo "$INNER_KERNEL" | cut -d. -f2)
+    if [[ "$INNER_MINOR" -lt 15 ]]; then
+        step_log "Kernel ${INNER_KERNEL} in ${VM_NAME} is < 5.15 — installing HWE kernel for Cilium"
+        ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} \
+            "sudo apt-get update -qq && sudo apt-get install -y linux-image-generic-hwe-20.04 linux-headers-generic-hwe-20.04"
+        NEEDS_REBOOT=true
+    else
+        step_log "Kernel ${INNER_KERNEL} in ${VM_NAME} meets Cilium requirement (>= 5.15)"
+    fi
+
+    # Check cgroup v2 (k0s v1.31+ requires it; Ubuntu 20.04 defaults to v1)
     if ! ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
             ubuntu@${INTERNAL_IP} "grep -q 'unified_cgroup_hierarchy=1' /proc/cmdline" 2>/dev/null; then
-        step_log "cgroup v2 not active — modifying GRUB and rebooting ${VM_NAME}"
+        step_log "cgroup v2 not active — updating GRUB in ${VM_NAME}"
         ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} \
             'sudo sed -i "s/^GRUB_CMDLINE_LINUX=.*/GRUB_CMDLINE_LINUX=\"systemd.unified_cgroup_hierarchy=1\"/" /etc/default/grub && sudo update-grub'
+        NEEDS_REBOOT=true
+    else
+        step_log "cgroup v2 already active in ${VM_NAME}"
+    fi
+
+    if $NEEDS_REBOOT; then
+        step_log "Rebooting ${VM_NAME} for kernel/cgroup changes"
         ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} \
             'sudo reboot' || true
         sleep 15
-        step_log "Waiting for ${VM_NAME} to come back up after cgroup v2 reboot"
+        step_log "Waiting for ${VM_NAME} to come back up"
         for i in {1..60}; do
             if ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
                     -oConnectTimeout=5 ubuntu@${INTERNAL_IP} "echo ok" 2>/dev/null; then
@@ -545,8 +605,6 @@ if [ -f "$AZURE_USER_HOME/.net_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.k0s_in
             echo "Waiting for VM to reboot... ($i/60)"
             sleep 5
         done
-    else
-        step_log "cgroup v2 already active in ${VM_NAME} — no reboot needed"
     fi
 
     if [ "${INSTANCE_ID}" -eq "0" ]; then
