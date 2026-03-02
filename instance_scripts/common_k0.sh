@@ -36,6 +36,17 @@ install_k0s() {
   sudo mkdir -p /opt/cni/bin
   curl -L https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz \
     | sudo tar -xz -C /opt/cni/bin
+
+  # Provide kubectl command by forwarding to k0s kubectl.
+  # This avoids requiring users to type "k0s kubectl" everywhere.
+  if ! command -v kubectl >/dev/null 2>&1; then
+    log "Installing kubectl shim (k0s kubectl wrapper)"
+    sudo tee /usr/local/bin/kubectl >/dev/null <<'EOF'
+#!/usr/bin/env bash
+exec /usr/local/bin/k0s kubectl "$@"
+EOF
+    sudo chmod +x /usr/local/bin/kubectl
+  fi
 }
 
 wait_for_token() {         # $1 = controller_ip
@@ -48,5 +59,4 @@ wait_for_token() {         # $1 = controller_ip
   done
   return 1
 }
-
 

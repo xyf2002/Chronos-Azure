@@ -1,60 +1,48 @@
 #!/bin/bash
-# File that contains node and IP mapping information
-ip_conf="nodes.json"
-sudo iptables -F
-echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward
+set -euo pipefail
 
-# Get the current hostname of the machine
-current_hostname=$(hostname -s)
+# Default values mirror the working command sequence from live debugging.
+HOST_IF="${HOST_IF:-eth0}"
+VM_BR="${VM_BR:-virbr0}"
 
-# Function to extract the IP mapping from the configuration file
-get_ip_mapping() {
-    node=$1
-    # Extract the IP mappings for the given node from ip.conf
-    grep -E "^${node}:" $ip_conf | sed -E "s/${node}://g" | tr -d '{}" '
+# Try to infer the inner VM subnet from virbr0 (e.g., 10.2.0.1/24 -> 10.2.0.0/24).
+if [ -n "${VM_SUBNET_CIDR:-}" ]; then
+INNER_SUBNET="$VM_SUBNET_CIDR"
+else
+BR_CIDR=$(ip -o -4 addr show "$VM_BR" 2>/dev/null | awk 'NR==1 {print $4}')
+if [ -n "$BR_CIDR" ]; then
+INNER_SUBNET=$(ip route show dev "$VM_BR" | awk '/proto kernel/ {print $1; exit}')
+else
+INNER_SUBNET="10.2.0.0/24"
+fi
+fi
+
+insert_rule_once() {
+local chain="$1"
+shift
+if ! sudo iptables -C "$chain" "$@" 2>/dev/null; then
+sudo iptables -I "$chain" 1 "$@"
+fi
 }
 
-# Iterate over each node and their corresponding IP mappings in the ip.conf
-while read -r line; do
-    # Extract node and IP mappings
-    node=$(echo "$line" | cut -d':' -f1)
-    echo $node
-    ip_mapping=$(echo "$line" | sed -E "s/${node}://g" | tr -d '{}" ')
+echo "Applying runtime sysctl forwarding/rp_filter settings"
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo sysctl -w net.ipv4.conf.all.rp_filter=2
+sudo sysctl -w "net.ipv4.conf.${HOST_IF}.rp_filter=2"
+sudo sysctl -w "net.ipv4.conf.${VM_BR}.rp_filter=2"
 
-    # Iterate over each IP pair for the current node
-    echo "$ip_mapping" | sed 's/,/\n/g' | while read -r pair; do
-        if [[ -z "$pair" || ! "$pair" =~ ":" ]]; then
-            continue
-        fi
+echo "Applying FORWARD rules for ${HOST_IF} <-> ${VM_BR} on ${INNER_SUBNET}"
+insert_rule_once FORWARD -i "$HOST_IF" -o "$VM_BR" -d "$INNER_SUBNET" -j ACCEPT
+insert_rule_once FORWARD -i "$VM_BR" -o "$HOST_IF" -s "$INNER_SUBNET" -j ACCEPT
+insert_rule_once FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-        # Split the pair into first_ip and second_ip
-        first_ip=$(echo $pair | cut -d':' -f1)
-        second_ip=$(echo $pair | cut -d':' -f2)
+echo "Applying LIBVIRT_FW* top rules (if chains exist)"
+for c in LIBVIRT_FWX LIBVIRT_FWI LIBVIRT_FWO; do
+sudo iptables -nL "$c" >/dev/null 2>&1 || continue
+insert_rule_once "$c" -i "$HOST_IF" -o "$VM_BR" -d "$INNER_SUBNET" -j ACCEPT
+insert_rule_once "$c" -i "$VM_BR" -o "$HOST_IF" -s "$INNER_SUBNET" -j ACCEPT
+insert_rule_once "$c" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+done    
+echo "IP forwarding and iptables rules applied successfully"
 
-        # If the hostname matches current_hostname
-        if [[ "$node" == "$current_hostname" ]]; then
-            echo "Running iptables for matching node: $first_ip -> $second_ip"
 
-#            echo "sudo iptables -t nat -A PREROUTING -d $first_ip -j DNAT --to-destination $second_ip"
-#            echo "sudo iptables -t nat -A POSTROUTING -s $second_ip -j MASQUERADE"
-            sudo iptables -t nat -A PREROUTING -d $first_ip -j DNAT --to-destination $second_ip
-            sudo iptables -t nat -A POSTROUTING -s $second_ip -j MASQUERADE
-        else
-            # If the hostname does not match current_hostname, reverse the iptables command
-            echo "Running iptables for non-matching node: $second_ip -> $first_ip"
-#            echo "sudo iptables -t nat -A PREROUTING -d $second_ip -j DNAT --to-destination $first_ip"
-#            echo "sudo iptables -t nat -A POSTROUTING -s $first_ip -j MASQUERADE"
-            sudo iptables -t nat -A PREROUTING -d $second_ip -j DNAT --to-destination  $first_ip
-            sudo iptables -t nat -A POSTROUTING -s $first_ip -j MASQUERADE
-        fi
-    done
-
-done < "$ip_conf"
-
-sudo iptables -A INPUT -p udp -j ACCEPT
-sudo iptables -A FORWARD -p tcp -j ACCEPT
-sudo iptables -A OUTPUT -p tcp -j ACCEPT
-sudo iptables -A OUTPUT -p udp -j ACCEPT
-sudo iptables -A INPUT -p sctp -j ACCEPT
-sudo iptables -A FORWARD -p sctp -j ACCEPT
-sudo iptables -A OUTPUT -p sctp -j ACCEPT

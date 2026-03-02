@@ -5,7 +5,7 @@
 echo "Assigning RBAC roles to Entra ID group for all created resources..."
 
 # Inputs
-RESOURCE_GROUP="chronos-exp"
+RESOURCE_GROUP="chronos-test"
 GROUP_OBJECT_ID="FILL IN" # chronos-exp
 ROLE="Reader"
 SUB=$(az account show --query id -o tsv)

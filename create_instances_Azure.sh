@@ -25,12 +25,22 @@ SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 standard_image="Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
 IMAGE="Canonical:0001-com-ubuntu-server-focal:20_04-lts-gen2:latest"
 
+SECURITY_TYPE="${SECURITY_TYPE:-}"   # set env var if you want: TrustedLaunch / ConfidentialVM
+
+SECURITY_ARGS=()
+if [[ -n "$SECURITY_TYPE" ]]; then
+  SECURITY_ARGS+=(--security-type "$SECURITY_TYPE")
+fi
+
 INSTANCE_COUNT=1
 VM_NAME_PREFIX="ins"
 PROXY_TYPE=""
 PROXY_ENABLED=false
 PROXY_COUNT=1
 DISK_SIZE=300  # Default disk size in GB
+BASTION_NAME="chronos-bastion"
+BASTION_ENABLE_TUNNELING="${BASTION_ENABLE_TUNNELING:-true}"
+BASTION_ENABLE_IP_CONNECT="${BASTION_ENABLE_IP_CONNECT:-true}"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -47,7 +57,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --location <location>            Azure region, e.g., uksouth (default: uksouth)"
             echo "  --vm-size <type>                 Azure VM size, e.g., Standard_D2s_v3 (default: Standard_D2s_v3)"
             echo "  --instance-count <count>         Number of Azure VMs to launch (default: 1)"
-            echo "  --secondary-ip-count <count>     Number of extra private IPs per VM (default: 2)"
+            echo "  --secondary-ip-count <count>     Number of extra private IPs on insX NIC1 (10.1.i.x) only (default: 2)"
             echo "  --vm-per-instance <count>        Number of QEMU VMs per Azure VM (default: 2)"
             echo "  --vm-name-prefix <prefix>        Prefix for VM names (default: ins)"
             echo "  --proxy-type <type>             VM size for proxy machine (enables proxy creation)"
@@ -181,6 +191,11 @@ SUBNET_PREFIX="10.0.1.0/24"
 
 # Default MAX_SECONDARY_IPS if not set by command line args above
 MAX_SECONDARY_IPS=${MAX_SECONDARY_IPS:-2}
+# Optional pause between each IP config create (seconds). Set >0 only if you hit API throttling.
+IPCONFIG_DELAY_SEC=${IPCONFIG_DELAY_SEC:-0}
+# Try to add all secondary IP configs in one NIC update call for speed.
+# Falls back to per-IP create loop on failure.
+IPCONFIG_BULK_MODE=${IPCONFIG_BULK_MODE:-true}
 
 
 echo "Checking if resource group '$RESOURCE_GROUP' exists..."
@@ -252,7 +267,6 @@ done
 ################################################################################
 # Step 2.5: Create Azure Bastion Subnet and Service
 ################################################################################
-BASTION_NAME="chronos-bastion"
 BASTION_PIP_NAME="chronos-bastion-pip"
 BASTION_SUBNET_NAME="AzureBastionSubnet"
 BASTION_SUBNET_PREFIX="10.0.0.0/27"
@@ -275,6 +289,15 @@ BASTION_STATE=$(az network bastion show --resource-group "$RESOURCE_GROUP" --nam
 BASTION_STATE=$(echo "$BASTION_STATE" | tr -d '\r')
 if [[ "$BASTION_STATE" == "Succeeded" ]]; then
   echo "Azure Bastion ${BASTION_NAME} already exists and is ready (state: $BASTION_STATE)."
+  echo "Ensuring Bastion native SSH support is enabled..."
+  az network bastion update \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$BASTION_NAME" \
+    --sku Standard \
+    --enable-tunneling "$BASTION_ENABLE_TUNNELING" \
+    --enable-ip-connect "$BASTION_ENABLE_IP_CONNECT" \
+    --no-wait \
+    --only-show-errors || echo "Warning: Could not update Bastion settings right now."
 elif [[ -n "$BASTION_STATE" ]] && [[ "$BASTION_STATE" != "Failed" ]]; then
   echo "Azure Bastion ${BASTION_NAME} is currently provisioning (state: $BASTION_STATE). Continuing without wait..."
   # Don't wait here, let the script continue
@@ -300,6 +323,9 @@ else
     --location "$LOCATION" \
     --vnet-name "$VNET_NAME" \
     --public-ip-address "$BASTION_PIP_NAME" \
+    --sku Standard \
+    --enable-tunneling "$BASTION_ENABLE_TUNNELING" \
+    --enable-ip-connect "$BASTION_ENABLE_IP_CONNECT" \
     --no-wait
 
   echo "Bastion creation initiated in background. You can check status in Azure Portal."
@@ -358,6 +384,34 @@ for attempt in {1..10}; do
 done
 
 ################################################################################
+# Step 2.6b: Route table for nested QEMU subnet reachability
+################################################################################
+ROUTE_TABLE_NAME="chronos-innervm-rt"
+echo "Ensuring route table ${ROUTE_TABLE_NAME} exists..."
+if ! az network route-table show --resource-group "$RESOURCE_GROUP" --name "$ROUTE_TABLE_NAME" >/dev/null 2>&1; then
+  az network route-table create \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$ROUTE_TABLE_NAME" \
+    --location "$LOCATION" \
+    --output none
+fi
+
+echo "Programming routes 10.2.i.0/24 -> 10.1.i.5 in ${ROUTE_TABLE_NAME}..."
+for (( i=0; i<INSTANCE_COUNT; i++ )); do
+  INNER_PREFIX="10.2.${i}.0/24"
+  NEXT_HOP_IP="10.1.${i}.5"
+  ROUTE_NAME="to-inner-${i}"
+  az network route-table route create \
+    --resource-group "$RESOURCE_GROUP" \
+    --route-table-name "$ROUTE_TABLE_NAME" \
+    --name "$ROUTE_NAME" \
+    --address-prefix "$INNER_PREFIX" \
+    --next-hop-type VirtualAppliance \
+    --next-hop-ip-address "$NEXT_HOP_IP" \
+    --output none
+done
+
+################################################################################
 # Step 2.7: Create Proxy Subnets and Instances (if enabled)
 ################################################################################
 if [ "$PROXY_ENABLED" = true ]; then
@@ -378,7 +432,8 @@ if [ "$PROXY_ENABLED" = true ]; then
           --vnet-name "$VNET_NAME" \
           --name "$PROXY_SUBNET_NAME" \
           --address-prefix "$PROXY_SUBNET_PREFIX" \
-          --nat-gateway "$NAT_GATEWAY_NAME"
+          --nat-gateway "$NAT_GATEWAY_NAME" \
+          --route-table "$ROUTE_TABLE_NAME"
 
         for proxy_subnet_wait in {1..15}; do
           if az network vnet subnet show --resource-group "$RESOURCE_GROUP" --vnet-name "$VNET_NAME" --name "$PROXY_SUBNET_NAME" >/dev/null 2>&1; then
@@ -393,6 +448,14 @@ if [ "$PROXY_ENABLED" = true ]; then
             exit 1
           fi
         done
+
+        # Ensure route-table association is present even on reruns.
+        az network vnet subnet update \
+          --resource-group "$RESOURCE_GROUP" \
+          --vnet-name "$VNET_NAME" \
+          --name "$PROXY_SUBNET_NAME" \
+          --route-table "$ROUTE_TABLE_NAME" \
+          --output none
     done
 
     # Create NICs and VMs in parallel (one subshell per proxy)
@@ -432,7 +495,7 @@ if [ "$PROXY_ENABLED" = true ]; then
           --name "$PROXY_VM_NAME" \
           --nics "$PROXY_NIC_NAME" \
           --image "$IMAGE" \
-          --security-type Standard \
+          "${SECURITY_ARGS[@]}" \
           --size "$PROXY_TYPE" \
           --location "$LOCATION" \
           --admin-username azureuser \
@@ -510,6 +573,12 @@ GLOBALSC_NIC_NAME="globalsc-nic"
 
 if az network vnet subnet show --resource-group "$RESOURCE_GROUP" --vnet-name "$VNET_NAME" --name "$GLOBALSC_SUBNET_NAME" >/dev/null 2>&1; then
     echo "Global-SC subnet ${GLOBALSC_SUBNET_NAME} already exists, skipping."
+    az network vnet subnet update \
+      --resource-group "$RESOURCE_GROUP" \
+      --vnet-name "$VNET_NAME" \
+      --name "$GLOBALSC_SUBNET_NAME" \
+      --route-table "$ROUTE_TABLE_NAME" \
+      --output none
 else
     echo "Creating Global-SC subnet ${GLOBALSC_SUBNET_NAME}..."
     if ! az network vnet subnet create \
@@ -517,7 +586,8 @@ else
       --vnet-name "$VNET_NAME" \
       --name "$GLOBALSC_SUBNET_NAME" \
       --address-prefix "$GLOBALSC_SUBNET_PREFIX" \
-      --nat-gateway "$NAT_GATEWAY_NAME"; then
+      --nat-gateway "$NAT_GATEWAY_NAME" \
+      --route-table "$ROUTE_TABLE_NAME"; then
         echo "ERROR: Global-SC subnet creation failed"
         exit 1
     fi
@@ -547,7 +617,7 @@ fi
           --name "$GLOBALSC_VM_NAME" \
           --nics "$GLOBALSC_NIC_NAME" \
           --image "$IMAGE" \
-          --security-type Standard \
+          "${SECURITY_ARGS[@]}" \
           --size "${PROXY_TYPE:-$VM_SIZE}" \
           --location "$LOCATION" \
           --admin-username azureuser \
@@ -610,7 +680,7 @@ fi
 ################################################################################
 
 # Sequentially create all subnets to avoid concurrency conflicts
-# Create both subnet sets for all instances
+# Create instance subnets for all instances
 for (( i=0; i<INSTANCE_COUNT; i++ )); do
     # First subnet set (10.1.x.0/24)
     SUBNET_NAME_1="subnet${i}"
@@ -621,7 +691,9 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
       --vnet-name "$VNET_NAME" \
       --name "$SUBNET_NAME_1" \
       --address-prefix "$SUBNET_PREFIX_1" \
-      --nat-gateway "$NAT_GATEWAY_NAME"
+      --nat-gateway "$NAT_GATEWAY_NAME" \
+      --route-table "$ROUTE_TABLE_NAME" \
+      --output none
 
     # Wait for first subnet creation to complete
     for subnet_attempt in {1..10}; do
@@ -637,48 +709,111 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
         exit 1
       fi
     done
-
-    # Second subnet set (10.5.x.0/24)
-    SUBNET_NAME_2="subnet-sec${i}"
-    SUBNET_PREFIX_2="10.5.$i.0/24"
-    echo "Creating subnet ${SUBNET_NAME_2} with prefix ${SUBNET_PREFIX_2}..."
-    az network vnet subnet create \
+    # Ensure route-table association exists on reruns.
+    az network vnet subnet update \
       --resource-group "$RESOURCE_GROUP" \
       --vnet-name "$VNET_NAME" \
-      --name "$SUBNET_NAME_2" \
-      --address-prefix "$SUBNET_PREFIX_2" \
-      --nat-gateway "$NAT_GATEWAY_NAME"
-
-    # Wait for second subnet creation to complete
-    for subnet_attempt in {1..10}; do
-      if az network vnet subnet show --resource-group "$RESOURCE_GROUP" --vnet-name "$VNET_NAME" --name "$SUBNET_NAME_2" >/dev/null 2>&1; then
-        echo "Subnet ${SUBNET_NAME_2} created successfully with NAT Gateway"
-        break
-      else
-        echo "Waiting for subnet ${SUBNET_NAME_2} to be ready... (${subnet_attempt}/10)"
-        sleep 3
-      fi
-      if [ $subnet_attempt -eq 10 ]; then
-        echo "ERROR: Subnet ${SUBNET_NAME_2} was not created successfully"
-        exit 1
-      fi
-    done
+      --name "$SUBNET_NAME_1" \
+      --route-table "$ROUTE_TABLE_NAME" \
+      --output none
 done
+
+# Add secondary NIC IP configs sequentially on a NIC.
+add_secondary_ip_configs() {
+  local nic_name="$1"
+  local subnet_name="$2"
+  local ip_prefix="$3"
+  local fail_file="$4"
+  local ip_base="$5"
+  local subnet_id
+
+  : > "$fail_file"
+
+  if [ "$IPCONFIG_BULK_MODE" = "true" ]; then
+    subnet_id=$(az network vnet subnet show \
+      --resource-group "$RESOURCE_GROUP" \
+      --vnet-name "$VNET_NAME" \
+      --name "$subnet_name" \
+      --query id \
+      --output tsv 2>/dev/null)
+
+    if [ -n "$subnet_id" ]; then
+      local -a bulk_cmd
+      bulk_cmd=(
+        az network nic update
+        --resource-group "$RESOURCE_GROUP"
+        --name "$nic_name"
+        --only-show-errors
+        --output none
+      )
+      local additions=0
+
+      for j in $(seq 1 "$MAX_SECONDARY_IPS"); do
+        local sec_ip ipconfig_name existing_count ipcfg_json
+        sec_ip="${ip_prefix}.$((ip_base + j))"
+        ipconfig_name="ipconfig$((j+1))"
+
+        existing_count=$(az network nic show \
+          --resource-group "$RESOURCE_GROUP" \
+          --name "$nic_name" \
+          --query "length(ipConfigurations[?name=='$ipconfig_name' || privateIPAddress=='$sec_ip'])" \
+          --output tsv 2>/dev/null)
+
+        if [ "$existing_count" = "0" ] || [ -z "$existing_count" ]; then
+          ipcfg_json=$(printf '{"name":"%s","privateIPAddress":"%s","privateIPAllocationMethod":"Static","subnet":{"id":"%s"}}' \
+            "$ipconfig_name" "$sec_ip" "$subnet_id")
+          bulk_cmd+=(--add ipConfigurations "$ipcfg_json")
+          additions=$((additions + 1))
+        fi
+      done
+
+      if [ "$additions" -gt 0 ]; then
+        echo "Adding ${additions} secondary IPs to ${nic_name} in one bulk update..."
+        if "${bulk_cmd[@]}"; then
+          return 0
+        fi
+        echo "Bulk IP configuration update failed for ${nic_name}; falling back to sequential mode."
+      else
+        return 0
+      fi
+    fi
+  fi
+
+  for j in $(seq 1 "$MAX_SECONDARY_IPS"); do
+    local sec_ip ipconfig_name
+    sec_ip="${ip_prefix}.$((ip_base + j))"
+    ipconfig_name="ipconfig$((j+1))"
+    echo "Trying to add secondary IP: $sec_ip to $nic_name as $ipconfig_name"
+    if ! az network nic ip-config create \
+      --resource-group "$RESOURCE_GROUP" \
+      --nic-name "$nic_name" \
+      --name "$ipconfig_name" \
+      --vnet-name "$VNET_NAME" \
+      --subnet "$subnet_name" \
+      --private-ip-address "$sec_ip" \
+      --only-show-errors \
+      --output none; then
+      echo "Failed to add $sec_ip"
+      echo "$sec_ip" >> "$fail_file"
+    fi
+
+    if [ "$IPCONFIG_DELAY_SEC" != "0" ]; then
+      sleep "$IPCONFIG_DELAY_SEC"
+    fi
+  done
+}
 
 # After all subnets are ready, create NIC/VM and other resources in parallel
 for (( i=0; i<INSTANCE_COUNT; i++ )); do
   (
     VM_NAME="${VM_NAME_PREFIX}${i}"
     NIC_NAME_1="${VM_NAME}NIC1"
-    NIC_NAME_2="${VM_NAME}NIC2"
     SUBNET_NAME_1="subnet${i}"
-    SUBNET_NAME_2="subnet-sec${i}"
     IP_BASE=5
     PRIMARY_IP_1="10.1.$i.${IP_BASE}"
-    PRIMARY_IP_2="10.5.$i.${IP_BASE}"
 
     # VM will use private IPs only - no public IP, no external access
-    echo "VM ${VM_NAME} will use private IPs only (${PRIMARY_IP_1}, ${PRIMARY_IP_2}) - accessible via Bastion only"
+    echo "VM ${VM_NAME} will use private IP only (${PRIMARY_IP_1}) - accessible via Bastion only"
 
     echo "CREATING FIRST NIC ${NIC_NAME_1} WITH PRIVATE IP ${PRIMARY_IP_1}..."
     az network nic create \
@@ -687,19 +822,12 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
       --vnet-name "$VNET_NAME" \
       --subnet "$SUBNET_NAME_1" \
       --private-ip-address "$PRIMARY_IP_1" \
-      --ip-forwarding true
+      --ip-forwarding true \
+      --only-show-errors \
+      --output none
 
-    echo "CREATING SECOND NIC ${NIC_NAME_2} WITH PRIVATE IP ${PRIMARY_IP_2}..."
-    az network nic create \
-      --resource-group "$RESOURCE_GROUP" \
-      --name "$NIC_NAME_2" \
-      --vnet-name "$VNET_NAME" \
-      --subnet "$SUBNET_NAME_2" \
-      --private-ip-address "$PRIMARY_IP_2" \
-      --ip-forwarding true
-
-    # Verify both NICs creation
-    for NIC_NAME in "$NIC_NAME_1" "$NIC_NAME_2"; do
+    # Verify NIC creation
+    for NIC_NAME in "$NIC_NAME_1"; do
       echo "Verifying NIC ${NIC_NAME} was created..."
       for verify_attempt in {1..10}; do
         if az network nic show --resource-group "$RESOURCE_GROUP" --name "$NIC_NAME" >/dev/null 2>&1; then
@@ -716,54 +844,27 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
       done
     done
 
-    # Assign secondary IPs to first NIC (10.1.i.x)
-    echo "Adding secondary IP configurations to ${NIC_NAME_1}..."
+    # Assign secondary IPs only to insX NIC1 (10.1.i.x).
+    echo "Adding secondary IP configurations to ${NIC_NAME_1} (10.1.$i.x) only..."
     failed_ips=()
-    for j in $(seq 1 $MAX_SECONDARY_IPS); do
-      SEC_IP="10.1.$i.$((IP_BASE + j))"
-      ipconfig_name="ipconfig$((j+1))"
-      echo "Trying to add secondary IP: $SEC_IP to $NIC_NAME_1 as $ipconfig_name"
-      if ! az network nic ip-config create \
-        --resource-group "$RESOURCE_GROUP" \
-        --nic-name "$NIC_NAME_1" \
-        --name "$ipconfig_name" \
-        --vnet-name "$VNET_NAME" \
-        --subnet "$SUBNET_NAME_1" \
-        --private-ip-address "$SEC_IP" \
-        --make-primary false 2>&1 | tee /tmp/ipconfig_${NIC_NAME_1}_${SEC_IP}.log; then
-        echo "Failed to add $SEC_IP, see /tmp/ipconfig_${NIC_NAME_1}_${SEC_IP}.log"
-        failed_ips+=($SEC_IP)
-      fi
-      sleep 1
-    done
+    FAIL_FILE_1="/tmp/ipcfg_failed_${NIC_NAME_1}.txt"
 
-    # Assign secondary IPs to second NIC (10.5.i.x)
-    echo "Adding secondary IP configurations to ${NIC_NAME_2}..."
-    for j in $(seq 1 $MAX_SECONDARY_IPS); do
-      SEC_IP="10.5.$i.$((IP_BASE + j))"
-      ipconfig_name="ipconfig$((j+1))"
-      echo "Trying to add secondary IP: $SEC_IP to $NIC_NAME_2 as $ipconfig_name"
-      if ! az network nic ip-config create \
-        --resource-group "$RESOURCE_GROUP" \
-        --nic-name "$NIC_NAME_2" \
-        --name "$ipconfig_name" \
-        --vnet-name "$VNET_NAME" \
-        --subnet "$SUBNET_NAME_2" \
-        --private-ip-address "$SEC_IP" \
-        --make-primary false 2>&1 | tee /tmp/ipconfig_${NIC_NAME_2}_${SEC_IP}.log; then
-        echo "Failed to add $SEC_IP, see /tmp/ipconfig_${NIC_NAME_2}_${SEC_IP}.log"
-        failed_ips+=($SEC_IP)
-      fi
-      sleep 1
-    done
+    add_secondary_ip_configs "$NIC_NAME_1" "$SUBNET_NAME_1" "10.1.$i" "$FAIL_FILE_1" "$IP_BASE"
+
+    if [ -s "$FAIL_FILE_1" ]; then
+      while IFS= read -r ip; do
+        failed_ips+=("$ip")
+      done < "$FAIL_FILE_1"
+    fi
+    rm -f "$FAIL_FILE_1"
 
     if [ ${#failed_ips[@]} -gt 0 ]; then
       echo "WARNING: Failed to add the following IPs: ${failed_ips[*]}"
     else
-      echo "All secondary IPs added for both NICs"
+      echo "All secondary IPs added for ${NIC_NAME_1}"
     fi
 
-    echo "CREATING VM ${VM_NAME} with dual NICs..."
+    echo "CREATING VM ${VM_NAME} with single NIC..."
     
     # Verify SSH key exists before creating VM
     if [ ! -f "$AZURE_KEY_PUB_FILE" ]; then
@@ -774,9 +875,9 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
     az vm create \
       --resource-group "$RESOURCE_GROUP" \
       --name "$VM_NAME" \
-      --nics "$NIC_NAME_1" "$NIC_NAME_2" \
+      --nics "$NIC_NAME_1" \
       --image "$IMAGE" \
-      --security-type Standard \
+      "${SECURITY_ARGS[@]}" \
       --size "$VM_SIZE" \
       --location "$LOCATION" \
       --admin-username azureuser \
@@ -791,8 +892,8 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
     #   --name "$VM_NAME" \
     #   --set diagnosticsProfile.bootDiagnostics.enabled=true
 
-    # Enable IP forwarding on both NICs
-    for NIC_NAME in "$NIC_NAME_1" "$NIC_NAME_2"; do
+    # Enable IP forwarding on NIC
+    for NIC_NAME in "$NIC_NAME_1"; do
       echo "Enabling IP forwarding on NIC ${NIC_NAME}..."
       az network nic update \
         --resource-group "$RESOURCE_GROUP" \
@@ -800,12 +901,12 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
         --ip-forwarding true
     done
 
-    # Automatically sync local SSH public key to VM's authorized_keys and configure dual NICs
+    # Automatically sync local SSH public key to VM's authorized_keys
     az vm run-command invoke \
       --resource-group "$RESOURCE_GROUP" \
       --name "$VM_NAME" \
       --command-id RunShellScript \
-      --scripts "mkdir -p /home/azureuser/.ssh; echo '$(cat ./azure-key.pub)' > /home/azureuser/.ssh/authorized_keys; chown -R azureuser:azureuser /home/azureuser/.ssh; chmod 600 /home/azureuser/.ssh/authorized_keys; echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf; sudo sysctl -p; echo 'Dual NIC setup: eth0 (10.1.$i.x) and eth1 (10.5.$i.x)'" \
+      --scripts "mkdir -p /home/azureuser/.ssh; echo '$(cat ./azure-key.pub)' > /home/azureuser/.ssh/authorized_keys; chown -R azureuser:azureuser /home/azureuser/.ssh; chmod 600 /home/azureuser/.ssh/authorized_keys; echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf; sudo sysctl -p; echo 'Single NIC setup: eth0 (10.1.$i.x)'" \
       --output none
 
     # Wait for VM to be fully provisioned
@@ -818,7 +919,7 @@ for (( i=0; i<INSTANCE_COUNT; i++ )); do
         --output tsv 2>/dev/null)
 
       if [[ -n "$VM_STATE" ]]; then
-        echo "VM ${VM_NAME} is running with private IP: ${PRIMARY_IP_1}, ${PRIMARY_IP_2}"
+        echo "VM ${VM_NAME} is running with private IP: ${PRIMARY_IP_1}"
         break
       fi
 

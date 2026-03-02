@@ -33,6 +33,52 @@ step_log() {
     echo ""
 }
 
+wait_for_vm_running() {
+    local vm_name="$1"
+    local attempts="${2:-60}"
+    local sleep_sec="${3:-2}"
+    local state
+
+    for i in $(seq 1 "$attempts"); do
+        state=$(sudo virsh domstate "$vm_name" 2>/dev/null | tr -d '\r' || echo "unknown")
+        echo "Waiting for ${vm_name} to be running... (${i}/${attempts}) -> state: ${state}"
+        if [[ "$state" == "running" ]]; then
+            return 0
+        fi
+        if [[ "$state" == "shut off" ]]; then
+            sudo virsh start "$vm_name" >/dev/null 2>&1 || true
+        fi
+        sleep "$sleep_sec"
+    done
+    return 1
+}
+
+wait_for_vm_ssh() {
+    local internal_ip="$1"
+    local ssh_key="$2"
+    local attempts="${3:-60}"
+    local sleep_sec="${4:-5}"
+
+    if [ ! -r "$ssh_key" ]; then
+        echo "SSH private key not found/readable: $ssh_key"
+        return 1
+    fi
+
+    for i in $(seq 1 "$attempts"); do
+        if ssh -i "$ssh_key" \
+            -oBatchMode=yes \
+            -oStrictHostKeyChecking=no \
+            -oUserKnownHostsFile=/dev/null \
+            -oConnectTimeout=10 \
+            ubuntu@"$internal_ip" "echo ok" >/dev/null 2>&1; then
+            return 0
+        fi
+        echo "Waiting for SSH readiness on ${internal_ip}... (${i}/${attempts})"
+        sleep "$sleep_sec"
+    done
+    return 1
+}
+
 # Step 0: Initialization
 step_log "Step 0: Initialization" "Starting integrated build_kernel process"
 
@@ -154,7 +200,21 @@ if [ -f "$AZURE_USER_HOME/.kernel_done" ] && [ ! -f "$AZURE_USER_HOME/.tsc_done"
     [ -f shared.c ] && { step_log "Compiling shared.c" ""; gcc shared.c -o shared; }
 
     step_log "Building fake_tsc module" ""; sudo make -C /lib/modules/$(uname -r)/build M=$PWD modules
-    step_log "Inserting custom_tsc.ko" ""; sudo insmod custom_tsc.ko; sudo modprobe kvm; sudo modprobe kvm_intel; sudo ./init; sudo ./init
+    step_log "Inserting custom_tsc.ko" ""
+    if ! sudo insmod custom_tsc.ko 2>/dev/null; then
+        if ! lsmod | grep -q '^custom_tsc'; then
+            echo "ERROR: failed to load custom_tsc.ko"
+            exit 1
+        fi
+    fi
+    sudo modprobe kvm
+    sudo modprobe kvm_intel
+    if [ ! -x ./init ]; then
+        echo "ERROR: fake_tsc init binary not found in $PWD"
+        exit 1
+    fi
+    sudo ./init 
+    sudo ./init
     step_log "Installing additional libs and verifying fake_tsc module" ""; sudo apt-get install -yqq libsctp-dev lksctp-tools zlib1g-dev; sudo modprobe sctp; sudo lsmod | grep custom_tsc || echo 'Warning: custom_tsc not loaded'; sudo dmesg | tail -n 20
     cp $AZURE_USER_HOME/instance_scripts/slotcheckerservice.c ./; gcc slotcheckerservice.c -o slotcheckerservice
     touch "$AZURE_USER_HOME/.tsc_done"
@@ -171,7 +231,7 @@ step_log "Step 3: VM Setup"
 ################################################################################
 if [ -f "$AZURE_USER_HOME/.tsc_done" ] && [ ! -f "$AZURE_USER_HOME/.vm_setup_done" ]; then
     step_log "Installing virtualization tools and creating VM (uvt-kvm + static MAC)"
-
+    sudo ethtool -K eth0 tx off tso off gso off gro off
     # 1. Packages
     sudo apt-get update
     sudo apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients \
@@ -242,9 +302,30 @@ NETXML
         VM_CPUS=$(( HOST_CPUS > 2 ? HOST_CPUS - 2 : 1 ))
         HOST_MEM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
         VM_MEM_MB=$(( HOST_MEM_MB > 4096 ? HOST_MEM_MB - 4096 : HOST_MEM_MB / 2 ))
+        SSH_KEY_DIR="$AZURE_USER_HOME/.ssh"
+        SSH_PRIVATE_KEY="$SSH_KEY_DIR/id_rsa"
+        SSH_PUBLIC_KEY="$SSH_PRIVATE_KEY.pub"
+        AZURE_USER_NAME="$(basename "$AZURE_USER_HOME")"
+        step_log "Preparing SSH key for uvt-kvm create"
+        sudo mkdir -p "$SSH_KEY_DIR"
+        sudo chown "$AZURE_USER_NAME:$AZURE_USER_NAME" "$SSH_KEY_DIR"
+        sudo chmod 700 "$SSH_KEY_DIR"
+        if [ -f "$SSH_PRIVATE_KEY" ] && [ ! -f "$SSH_PUBLIC_KEY" ]; then
+            sudo -u "$AZURE_USER_NAME" ssh-keygen -y -f "$SSH_PRIVATE_KEY" > "$SSH_PUBLIC_KEY"
+        elif [ ! -f "$SSH_PRIVATE_KEY" ] || [ ! -f "$SSH_PUBLIC_KEY" ]; then
+            sudo -u "$AZURE_USER_NAME" ssh-keygen -q -t rsa -N '' -f "$SSH_PRIVATE_KEY"
+        fi
+        sudo chown "$AZURE_USER_NAME:$AZURE_USER_NAME" "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY"
+        sudo chmod 600 "$SSH_PRIVATE_KEY"
+        sudo chmod 644 "$SSH_PUBLIC_KEY"
+        if [ ! -s "$SSH_PUBLIC_KEY" ]; then
+            echo "❌ Missing or empty SSH public key: $SSH_PUBLIC_KEY"
+            exit 1
+        fi
         if ! sudo uvt-kvm create "${VM_NAME}" \
                 release=focal arch=amd64 \
-                --cpu "${VM_CPUS}" --memory "${VM_MEM_MB}" --password 1997; then
+                --cpu "${VM_CPUS}" --memory "${VM_MEM_MB}" --disk 50 --password 1997 \
+                --ssh-public-key-file "$SSH_PUBLIC_KEY"; then
             echo "❌ uvt-kvm create failed, aborting"; exit 1
         fi
 
@@ -284,7 +365,7 @@ NETXML
 
         step_log "Pinning CPUs"
         NUM_CPU=$(nproc)
-        if [ "$NUM_CPU" -ge "4" ]; then
+        if [ "$NUM_CPU" -ge "8" ]; then
             VCPU_SEQVAR=$((VM_CPUS - 1))
             EMULATORPIN_CPUSET=$((NUM_CPU - 2))
             IOTHREADPIN_CPUSET=$((NUM_CPU - 1))
@@ -480,78 +561,46 @@ if [ -f "$AZURE_USER_HOME/.vm_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.net_set
     step_log "Adding ips"
     sudo $AZURE_USER_HOME/instance_scripts/add-secondary.sh
     sleep 5
-    step_log "Generating json"
-    sudo $AZURE_USER_HOME/instance_scripts/generate_config.sh $MACHINE_NUM
-    sleep 5
-    step_log "Adding IP TABLES"
+    step_log "Configuring host routing/forwarding (no per-IP DNAT)"
     sudo $AZURE_USER_HOME/instance_scripts/set_ip.sh
     sleep 5
-    if ! command -v sshpass >/dev/null 2>&1; then
-        step_log "Installing sshpass"
-        while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-            echo "Waiting for dpkg lock..."; sleep 5
-        done
-        sudo apt-get -y install sshpass
-    fi
-    password="1997"
     SSH_KEY_DIR="$AZURE_USER_HOME/.ssh"
     SSH_PRIVATE_KEY="$SSH_KEY_DIR/id_rsa"
-    SSH_PUBLIC_KEY="$SSH_PRIVATE_KEY.pub"
     SSH_OPTS="-i $SSH_PRIVATE_KEY -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
-    step_log "create ssh keys"
-    mkdir -p "$SSH_KEY_DIR"
-    chmod 700 "$SSH_KEY_DIR"
-    # Fix ownership if keys were previously created as root
-    sudo chown "$(id -un):$(id -gn)" "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY" 2>/dev/null || true
-    if [ -f "$SSH_PRIVATE_KEY" ] && [ ! -f "$SSH_PUBLIC_KEY" ]; then
-        ssh-keygen -y -f "$SSH_PRIVATE_KEY" > "$SSH_PUBLIC_KEY"
-    elif [ ! -f "$SSH_PRIVATE_KEY" ] || [ ! -f "$SSH_PUBLIC_KEY" ]; then
-        ssh-keygen -q -t rsa -N '' -f "$SSH_PRIVATE_KEY"
-    fi
-    chmod 600 "$SSH_PRIVATE_KEY"
-    chmod 644 "$SSH_PUBLIC_KEY"
-    step_log "Copying ssh keys"
-    KEY_COPIED=false
-    SSH_PREFIX=""
-
-    if sshpass -p "$password" ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
-            ubuntu@${INTERNAL_IP} \
-            "mkdir -p /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && cat >> /home/ubuntu/.ssh/authorized_keys && chmod 600 /home/ubuntu/.ssh/authorized_keys" \
-            < "$SSH_PUBLIC_KEY"; then
-        KEY_COPIED=true
-    else
-        step_log "stdin pipe failed, falling back to scp method"
-        if { sshpass -p "$password" scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
-                 "$SSH_PUBLIC_KEY" ubuntu@${INTERNAL_IP}:/tmp/id_rsa_tmp.pub && \
-             sshpass -p "$password" ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
-                 ubuntu@${INTERNAL_IP} \
-                 "mkdir -p /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && cat /tmp/id_rsa_tmp.pub >> /home/ubuntu/.ssh/authorized_keys && chmod 600 /home/ubuntu/.ssh/authorized_keys && rm -f /tmp/id_rsa_tmp.pub"; }; then
-            KEY_COPIED=true
-        else
-            step_log "scp method failed, falling back to ssh-copy-id with temp HOME"
-            mkdir -p /tmp/sshcopyid_home/.ssh
-            chmod 700 /tmp/sshcopyid_home/.ssh
-            if HOME=/tmp/sshcopyid_home sshpass -p "$password" ssh-copy-id \
-                    -i "$SSH_PUBLIC_KEY" \
-                    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                    ubuntu@${INTERNAL_IP}; then
-                KEY_COPIED=true
-            fi
-            rm -rf /tmp/sshcopyid_home
-        fi
+    step_log "Using SSH key injected at VM creation"
+    if [ ! -r "$SSH_PRIVATE_KEY" ]; then
+        echo "❌ SSH private key not found/readable: $SSH_PRIVATE_KEY"
+        exit 1
     fi
 
-    if ! $KEY_COPIED; then
-        step_log "All key copy methods failed — subsequent commands will use password auth"
-        SSH_PREFIX="sshpass -p $password"
-        SSH_OPTS="-oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
+    if ! wait_for_vm_running "$VM_NAME" 60 2; then
+        echo "❌ ${VM_NAME} is not running; aborting network setup"
+        exit 1
+    fi
+
+    if ! wait_for_vm_ssh "$INTERNAL_IP" "$SSH_PRIVATE_KEY" 60 5; then
+        echo "❌ SSH to ${VM_NAME} (${INTERNAL_IP}) is not ready; aborting network setup"
+        exit 1
     fi
 
     step_log "Copying script to add ip address"
-    $SSH_PREFIX scp $SSH_OPTS $AZURE_USER_HOME/instance_scripts/add-secondary_vm.sh ubuntu@${INTERNAL_IP}:/home/ubuntu/
+    if ! scp $SSH_OPTS $AZURE_USER_HOME/instance_scripts/add-secondary_vm.sh ubuntu@${INTERNAL_IP}:/home/ubuntu/; then
+        echo "❌ Failed to copy add-secondary_vm.sh to ${VM_NAME}"
+        exit 1
+    fi
     step_log "calling copied script"
-    $SSH_PREFIX ssh $SSH_OPTS ubuntu@${INTERNAL_IP} "sudo /home/ubuntu/add-secondary_vm.sh"
+    if ! ssh $SSH_OPTS ubuntu@${INTERNAL_IP} "sudo bash /home/ubuntu/add-secondary_vm.sh --install-service"; then
+        echo "❌ Failed to install/run add-secondary_vm.sh service in ${VM_NAME}"
+        exit 1
+    fi
     touch $AZURE_USER_HOME/.net_setup_done
+fi
+
+# Re-apply host forwarding policy on every run (iptables rules are not persistent
+# across reboot unless explicitly saved).
+if [ -f "$AZURE_USER_HOME/.vm_setup_done" ]; then
+    step_log "Ensuring host routing/forwarding policy"
+    # sudo $AZURE_USER_HOME/instance_scripts/set_ip.sh
 fi
 
 ################################################################################
@@ -562,17 +611,30 @@ if [ -f "$AZURE_USER_HOME/.net_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.k0s_in
     if ! command -v sshpass >/dev/null 2>&1; then
         step_log "Installing sshpass" ""; sudo apt-get install -y sshpass
     fi
+    SSH_PRIVATE_KEY="$AZURE_USER_HOME/.ssh/id_rsa"
+    SSH_OPTS="-i $SSH_PRIVATE_KEY -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
+    SSH_OPTS_CONNECT="$SSH_OPTS -oConnectTimeout=30"
+
+    if ! wait_for_vm_running "$VM_NAME" 60 2; then
+        echo "❌ ${VM_NAME} is not running; cannot continue k0s install"
+        exit 1
+    fi
+
+    if ! wait_for_vm_ssh "$INTERNAL_IP" "$SSH_PRIVATE_KEY" 60 5; then
+        echo "❌ SSH to ${VM_NAME} (${INTERNAL_IP}) is not ready; cannot continue k0s install"
+        exit 1
+    fi
 
     # Upgrade HWE kernel (5.15, required by Cilium) and enable cgroup v2 in one reboot.
     NEEDS_REBOOT=false
 
     # Check kernel version in inner VM
-    INNER_KERNEL=$(ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
+    INNER_KERNEL=$(ssh $SSH_OPTS \
         ubuntu@${INTERNAL_IP} "uname -r" 2>/dev/null || echo "0.0.0")
     INNER_MINOR=$(echo "$INNER_KERNEL" | cut -d. -f2)
     if [[ "$INNER_MINOR" -lt 15 ]]; then
         step_log "Kernel ${INNER_KERNEL} in ${VM_NAME} is < 5.15 — installing HWE kernel for Cilium"
-        ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} \
+        ssh $SSH_OPTS ubuntu@${INTERNAL_IP} \
             "sudo apt-get update -qq && sudo apt-get install -y linux-image-generic-hwe-20.04 linux-headers-generic-hwe-20.04"
         NEEDS_REBOOT=true
     else
@@ -580,10 +642,10 @@ if [ -f "$AZURE_USER_HOME/.net_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.k0s_in
     fi
 
     # Check cgroup v2 (k0s v1.31+ requires it; Ubuntu 20.04 defaults to v1)
-    if ! ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
+    if ! ssh $SSH_OPTS \
             ubuntu@${INTERNAL_IP} "grep -q 'unified_cgroup_hierarchy=1' /proc/cmdline" 2>/dev/null; then
         step_log "cgroup v2 not active — updating GRUB in ${VM_NAME}"
-        ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} \
+        ssh $SSH_OPTS ubuntu@${INTERNAL_IP} \
             'sudo sed -i "s/^GRUB_CMDLINE_LINUX=.*/GRUB_CMDLINE_LINUX=\"systemd.unified_cgroup_hierarchy=1\"/" /etc/default/grub && sudo update-grub'
         NEEDS_REBOOT=true
     else
@@ -592,13 +654,12 @@ if [ -f "$AZURE_USER_HOME/.net_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.k0s_in
 
     if $NEEDS_REBOOT; then
         step_log "Rebooting ${VM_NAME} for kernel/cgroup changes"
-        ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} \
+        ssh $SSH_OPTS ubuntu@${INTERNAL_IP} \
             'sudo reboot' || true
         sleep 15
         step_log "Waiting for ${VM_NAME} to come back up"
         for i in {1..60}; do
-            if ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null \
-                    -oConnectTimeout=5 ubuntu@${INTERNAL_IP} "echo ok" 2>/dev/null; then
+            if ssh $SSH_OPTS_CONNECT ubuntu@${INTERNAL_IP} "echo ok" 2>/dev/null; then
                 step_log "${VM_NAME} is back up"
                 break
             fi
@@ -609,24 +670,30 @@ if [ -f "$AZURE_USER_HOME/.net_setup_done" ] && [ ! -f "$AZURE_USER_HOME/.k0s_in
 
     if [ "${INSTANCE_ID}" -eq "0" ]; then
         step_log "Copying master k0s install script to VM" ""
-        scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null $AZURE_USER_HOME/instance_scripts/master_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
+        scp $SSH_OPTS $AZURE_USER_HOME/instance_scripts/master_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
     else
         step_log "Copying worker k0s install script to VM" ""
-        scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null $AZURE_USER_HOME/instance_scripts/worker_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
+        scp $SSH_OPTS $AZURE_USER_HOME/instance_scripts/worker_install_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
     fi
 
     step_log "Copying common k0s helper script to VM" ""
-    scp -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null $AZURE_USER_HOME/instance_scripts/common_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
+    scp $SSH_OPTS $AZURE_USER_HOME/instance_scripts/common_k0.sh ubuntu@${INTERNAL_IP}:/tmp/
 
     step_log "Creating SSH keys on VM" ""
-    ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} "mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -q -t rsa -N \"\" -f ~/.ssh/id_rsa"
+    ssh $SSH_OPTS ubuntu@${INTERNAL_IP} "mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -q -t rsa -N \"\" -f ~/.ssh/id_rsa"
     if [ "${INSTANCE_ID}" -eq "0" ]; then
         step_log "Running master k0s install script" ""
-        ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} "bash /tmp/master_install_k0.sh"
+        ssh $SSH_OPTS ubuntu@${INTERNAL_IP} "bash /tmp/master_install_k0.sh"
     else
-        ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null ubuntu@${INTERNAL_IP} "bash /tmp/worker_install_k0.sh 10.2.0.7"
+        ssh $SSH_OPTS ubuntu@${INTERNAL_IP} "bash /tmp/worker_install_k0.sh 10.2.0.7"
     fi
-    sudo gcc -pthread $AZURE_USER_HOME/instance_scripts/slotcheckerservice.c -o slotcheckerservice
+    if ! command -v gcc >/dev/null 2>&1; then
+        step_log "Installing gcc for slotcheckerservice build" ""
+        sudo apt-get update -y
+        sudo apt-get install -y gcc
+    fi
+    sudo gcc -pthread "$AZURE_USER_HOME/instance_scripts/slotcheckerservice.c" \
+      -o "$AZURE_USER_HOME/instance_scripts/slotcheckerservice"
     sudo cp $AZURE_USER_HOME/instance_scripts/slotcheckerservice.service /etc/systemd/system/slotcheckerservice.service
     sudo systemctl daemon-reload; sudo systemctl enable slotcheckerservice; sudo systemctl start slotcheckerservice
     touch "$AZURE_USER_HOME/.k0s_in_vm_done"
@@ -637,7 +704,7 @@ fi
 ################################################################################
 if [ -f "$AZURE_USER_HOME/.k0s_in_vm_done" ] && [ ! -f "$AZURE_USER_HOME/.auto_deploy_setup" ] && [ "$INSTANCE_ID" -eq "0" ]; then
     step_log "Step 6: Cloning quick_deployment_tools and setting up aliases"
-    SSH_OPTS="-oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
+    SSH_OPTS="-i $AZURE_USER_HOME/.ssh/id_rsa -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
 
     step_log "Cloning quick_deployment_tools"
     ssh $SSH_OPTS ubuntu@"${INTERNAL_IP}" "git clone --quiet https://github.com/netsys-edinburgh/quick_deployment_tools.git ~/quick_deployment_tools"
@@ -661,6 +728,28 @@ alias p="kubectl get pods"
 alias pw="kubectl get pods -o wide"
 EOF'
     touch "$AZURE_USER_HOME/.auto_deploy_setup"
+fi
+
+# Ensure controller shell helpers exist even on reruns where .auto_deploy_setup
+# already exists.
+if [ -f "$AZURE_USER_HOME/.k0s_in_vm_done" ] && [ "$INSTANCE_ID" -eq "0" ]; then
+    SSH_OPTS="-i $AZURE_USER_HOME/.ssh/id_rsa -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
+    step_log "Ensuring controller aliases in .bashrc"
+    ssh $SSH_OPTS ubuntu@"${INTERNAL_IP}" 'if ! grep -q "alias pw=\"kubectl get pods -o wide\"" "$HOME/.bashrc"; then cat << '"'"'EOF'"'"' >> "$HOME/.bashrc"
+s() {
+  helm install --values values.yaml $1 ./$1/
+}
+
+ns() {
+  helm uninstall $1
+}
+
+alias k="kubectl"
+alias l="kubectl logs"
+alias p="kubectl get pods"
+alias pw="kubectl get pods -o wide"
+EOF
+fi'
 fi
 
 step_log "All steps completed."

@@ -3,10 +3,10 @@ Description=Slot Checker Service
 After=network.target
 
 [Service]
-ExecStart=/local/repository/scripts/start_slotchecker.sh
+ExecStart=/home/azureuser/instance_scripts/start_slotchecker.sh
 Restart=always
-User=uzzu
-WorkingDirectory=/local/repository/scripts
+User=azureuser
+WorkingDirectory=/home/azureuser/instance_scripts/
 
 [Install]
 WantedBy=multi-user.target

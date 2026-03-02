@@ -34,6 +34,14 @@ typedef struct {
     int mapped;
 } Host;
 
+#define TYPE_PROXY 1
+#define TYPE_COMPONENT 2
+typedef struct __attribute__((__packed__)) slot_checker_ack {
+    uint8_t type;
+    uint32_t id;
+    uint8_t slot;
+} slot_checker_ack_t;
+
 int16_t slot = 2;
 
 // Function to create a new host mapper
@@ -166,9 +174,11 @@ void ReadFromSharedMem(Host *host, char *buffer, size_t buffer_size) {
 
 int send_to_switch(int client_fd, int num_to_send, struct sockaddr_in servaddr){
 
-//    printf("Sending %d\n", slot);
-    uint8_t buffer[]={(uint8_t)num_to_send, (uint8_t)slot};
-    sendto(client_fd, buffer, sizeof(buffer), MSG_CONFIRM, (const struct sockaddr *) &servaddr, sizeof(servaddr));
+    slot_checker_ack_t ack;
+    ack.type = (uint8_t) TYPE_COMPONENT;
+    ack.id = (uint32_t) num_to_send;
+    ack.slot = (uint8_t) slot;
+    sendto(client_fd, &ack, sizeof(ack), MSG_CONFIRM, (const struct sockaddr *) &servaddr, sizeof(servaddr));
 
 }
 
@@ -295,11 +305,18 @@ void handle_sigint(int sig) {
 }
 
 int main(int argc, char *argv[]){
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <component_id> [shm_path]\n", argv[0]);
+        return 1;
+    }
+
     int  c_id = atoi(argv[1]);
-    const char *shmPath = "/dev/shm/my-little-shared-memory";
+    const char *shmPath = (argc >= 3) ? argv[2] : "/dev/shm/my-little-shared-memory";
     Host *host = NewHost(shmPath);
 
     if (!host) {
+        fprintf(stderr, "Shared memory file missing: %s\n", shmPath);
+        fprintf(stderr, "Run fake_tsc init to create it (e.g., sudo ~/fake_tsc/init).\n");
         return 1;
     }
 
@@ -324,7 +341,7 @@ int main(int argc, char *argv[]){
     // Filling server information
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(SERVER_PORT);
-    servaddr.sin_addr.s_addr = inet_addr("10.4.1.5");  // Global-SC IP in Azure (10.4.1.0/24 subnet, .5 = first usable)
+    servaddr.sin_addr.s_addr = inet_addr("10.4.1.5");
     int port = 4322;
     int from_switch_fd = bind_for_switch(port);
     int new_value = 1;

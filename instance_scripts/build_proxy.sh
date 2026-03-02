@@ -49,7 +49,10 @@ for (( i=0; i<NUM_MACHINE; i++ )); do
   # Route to second NIC subnet (10.5.i.0/24)
   echo "Adding route: 10.5.${i}.0/24 via ${PROXY_GATEWAY}"
   sudo ip route add 10.5."${i}".0/24 via ${PROXY_GATEWAY} dev eth0 || echo "Route to 10.5.${i}.0/24 may already exist"
+
 done
+
+step_log "Using Azure UDR for 10.2.x.0/24 reachability"
 
 # Add all proxy subnet IPs on the primary 10.3.* interface
 step_log "Adding proxy subnet IP aliases"
@@ -58,27 +61,13 @@ if [ -z "$primary_if" ]; then
   echo "ERROR: Could not find interface with 10.3.* address"
   exit 1
 fi
-for i in $(seq 1 254); do
+for i in $(seq 6 254); do
   sudo ip addr add "10.3.$((PROXY_NODE_ID + 1)).${i}/24" dev "$primary_if" 2>/dev/null || true
 done
 
-# Enable forwarding and add DNAT/SNAT rules so proxy can reach all inner VMs
-step_log "Configuring DNAT/SNAT rules for inner VMs"
+# Enable forwarding only; per-IP DNAT/SNAT is intentionally not used.
+step_log "Configuring routing mode (no per-IP NAT)"
 sudo sysctl -w net.ipv4.ip_forward=1
-for (( i=0; i<NUM_MACHINE; i++ )); do
-  for host in $(seq 7 254); do
-    INNER_IP="10.2.${i}.${host}"
-    OUTER_IP="10.1.${i}.${host}"
-    echo "Adding NAT rules: ${INNER_IP} -> ${OUTER_IP}"
-
-    sudo iptables -t nat -C OUTPUT -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}" 2>/dev/null || \
-      sudo iptables -t nat -I OUTPUT 1 -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}"
-    sudo iptables -t nat -C PREROUTING -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}" 2>/dev/null || \
-      sudo iptables -t nat -I PREROUTING 1 -d "${INNER_IP}/32" -j DNAT --to-destination "${OUTER_IP}"
-    sudo iptables -t nat -C POSTROUTING -d "${OUTER_IP}/32" -j MASQUERADE 2>/dev/null || \
-      sudo iptables -t nat -I POSTROUTING 1 -d "${OUTER_IP}/32" -j MASQUERADE
-  done
-done
 
 make -j
 
@@ -92,7 +81,6 @@ done
 # Copy common_k0.sh to /tmp for worker_install_k0.sh to source
 cp $AZURE_USER_HOME/instance_scripts/common_k0.sh /tmp/common_k0.sh
 
-# Join the k8s cluster as a worker
-# 10.1.0.7 is the registered secondary IP on ins0's NIC, DNAT'd to the controller QEMU VM (10.2.0.7)
+# Join the k8s cluster as a worker using direct route to the controller VM.
 step_log "Joining k8s cluster as worker (proxy-${PROXY_ID})"
-bash $AZURE_USER_HOME/instance_scripts/worker_install_k0.sh 10.1.0.7
+bash $AZURE_USER_HOME/instance_scripts/worker_install_k0.sh 10.2.0.7

@@ -19,15 +19,14 @@ install_k0s
 
 # --- Node IP setup (nested VMs only) ---
 # Nested VMs have hostnames like ins0vm, ins1vm, etc.
-# Derive the instance index and add the routable /32 address to the NIC so
-# kubelet registers with 10.1.<id>.7 rather than the libvirt-internal IP.
+# Derive the instance index and pin kubelet registration to the inner VM IP.
 IFACE="enp1s0"
 KUBELET_ARGS="--max-pods=243 --node-status-update-frequency=1s"
 LABEL_ARGS=()
 
 if [[ "$HOSTNAME" =~ ^ins([0-9]+)vm$ ]]; then
   INSTANCE_ID="${BASH_REMATCH[1]}"
-  NODE_IP="10.1.${INSTANCE_ID}.7"
+  NODE_IP="10.2.${INSTANCE_ID}.7"
   sudo ip addr add "${NODE_IP}/32" dev "$IFACE" 2>/dev/null || true
   KUBELET_ARGS="${KUBELET_ARGS} --node-ip=${NODE_IP}"
   LABEL_ARGS=(--labels "dilated=true")

@@ -14,10 +14,10 @@ install_k0s
 sudo wget -qO /usr/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
 sudo chmod +x /usr/bin/yq
 
-# Add routable /32 address to inner VM NIC so kubelet registers with the
-# routable IP (10.1.0.7) rather than the libvirt-internal IP (10.2.0.7).
+# Add controller /32 address to inner VM NIC and register kubelet on the
+# libvirt-internal controller IP.
 IFACE="enp1s0"
-NODE_IP="10.1.0.7"
+NODE_IP="10.2.0.7"
 sudo ip addr add "${NODE_IP}/32" dev "$IFACE" 2>/dev/null || true
 
 # Update the hostname (used as node name in k8s)
@@ -36,7 +36,7 @@ sed -i 's/^    provider: kuberouter$/    provider: custom/' k0s.yaml
 sed -i 's/^  controllerManager: {}/  controllerManager:\n    extraArgs:\n      node-monitor-grace-period: 50000s/g' k0s.yaml
 
 # Set API externalAddress so kubeconfig and worker join tokens point to the
-# routable IP (10.1.0.7) instead of the internal libvirt IP (10.2.0.7).
+# controller's inner network address.
 yq e ".spec.api.externalAddress = \"${NODE_IP}\"" -i k0s.yaml
 
 log "Installing controller service"
@@ -63,7 +63,7 @@ while :; do
 done
 
 # Generate kubeconfig — use k0s kubeconfig admin so the server address
-# reflects externalAddress (10.1.0.7:6443), not the internal IP.
+# reflects externalAddress (${NODE_IP}:6443).
 sudo k0s kubeconfig admin > /home/ubuntu/admin.conf
 chown ubuntu:ubuntu /home/ubuntu/admin.conf
 chmod 600 /home/ubuntu/admin.conf
