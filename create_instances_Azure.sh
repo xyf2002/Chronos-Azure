@@ -37,6 +37,7 @@ VM_NAME_PREFIX="ins"
 PROXY_TYPE=""
 PROXY_ENABLED=false
 PROXY_COUNT=1
+GLOBALSC_TYPE=""
 DISK_SIZE=300  # Default disk size in GB
 BASTION_NAME="chronos-bastion"
 BASTION_ENABLE_TUNNELING="${BASTION_ENABLE_TUNNELING:-true}"
@@ -49,7 +50,7 @@ while [[ $# -gt 0 ]]; do
             echo "create_instances_Azure.sh - create Azure VMs and configure Chronos experiment"
             echo ""
             echo "Usage:"
-            echo "  ./create_instances_Azure.sh --resource-group <resource-group> --location <location> --vm-size <vm-size> --instance-count <count> [--secondary-ip-count <count>] [--vm-per-instance <count>] [--proxy-type <type>] [--disk-size <size>]"
+            echo "  ./create_instances_Azure.sh --resource-group <resource-group> --location <location> --vm-size <vm-size> --instance-count <count> [--secondary-ip-count <count>] [--vm-per-instance <count>] [--proxy-type <type>] [--globalsc-type <type>] [--disk-size <size>]"
             echo ""
             echo "Options:"
             echo "  --help, -h                      Show this help message and exit"
@@ -62,11 +63,12 @@ while [[ $# -gt 0 ]]; do
             echo "  --vm-name-prefix <prefix>        Prefix for VM names (default: ins)"
             echo "  --proxy-type <type>             VM size for proxy machine (enables proxy creation)"
             echo "  --proxy-count <n>               Number of proxy VMs to create (default: 1, requires --proxy-type)"
+            echo "  --globalsc-type <type>          VM size for Global-SC machine (default: --proxy-type if set, else --vm-size)"
             echo "  --disk-size <size>              OS disk size in GB (default: 30)
   --ssh-key <path>               Path to existing private key (default: ./azure-key); generates if absent"
             echo ""
             echo "Example:"
-            echo "  ./create_instances_Azure.sh --resource-group chronos-test --location uksouth --vm-size Standard_D2s_v3 --instance-count 2 --secondary-ip-count 2 --proxy-type Standard_D2s_v3 --proxy-count 2 --disk-size 50"
+            echo "  ./create_instances_Azure.sh --resource-group chronos-test --location uksouth --vm-size Standard_D2s_v3 --instance-count 2 --secondary-ip-count 2 --proxy-type Standard_D2s_v3 --globalsc-type Standard_D4s_v3 --proxy-count 2 --disk-size 50"
             exit 0
             ;;
         --resource-group)
@@ -141,6 +143,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --proxy-count=*)
             PROXY_COUNT="${1#*=}"
+            shift
+            ;;
+        --globalsc-type)
+            GLOBALSC_TYPE="$2"
+            shift 2
+            ;;
+        --globalsc-type=*)
+            GLOBALSC_TYPE="${1#*=}"
             shift
             ;;
         --disk-size)
@@ -611,14 +621,14 @@ fi
     if az vm show --resource-group "$RESOURCE_GROUP" --name "$GLOBALSC_VM_NAME" >/dev/null 2>&1; then
         echo "Global-SC VM ${GLOBALSC_VM_NAME} already exists, skipping creation."
     else
-        echo "Creating Global-SC VM ${GLOBALSC_VM_NAME}..."
+        echo "Creating Global-SC VM ${GLOBALSC_VM_NAME} with type ${GLOBALSC_TYPE:-${PROXY_TYPE:-$VM_SIZE}}..."
         az vm create \
           --resource-group "$RESOURCE_GROUP" \
           --name "$GLOBALSC_VM_NAME" \
           --nics "$GLOBALSC_NIC_NAME" \
           --image "$IMAGE" \
           "${SECURITY_ARGS[@]}" \
-          --size "${PROXY_TYPE:-$VM_SIZE}" \
+          --size "${GLOBALSC_TYPE:-${PROXY_TYPE:-$VM_SIZE}}" \
           --location "$LOCATION" \
           --admin-username azureuser \
           --ssh-key-values "$AZURE_KEY_PUB_FILE" \
